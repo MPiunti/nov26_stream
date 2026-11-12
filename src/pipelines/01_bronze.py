@@ -1,3 +1,4 @@
+
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
 
@@ -6,6 +7,7 @@ from pyspark.sql import functions as F
 # ============================================================
 
 SOURCE_TABLE = "workspace.test02_streaming.simulated_event_source"
+
 
 @dp.table(
     name="bronze_people_counter_events",
@@ -25,9 +27,7 @@ def bronze_people_counter_events():
                 F.col("source_topic"),
                 F.col("source_partition"),
                 F.col("source_offset"),
-                F.col("source_timestamp")
-                    .alias("kafka_record_timestamp"),
-                F.current_timestamp()
-                    .alias("ingestion_timestamp")
+                F.col("source_timestamp"),
+                F.current_timestamp().alias("ingestion_timestamp")
             )
     )
