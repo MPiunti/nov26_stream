@@ -12,3 +12,6 @@ targets:
   dev:
     mode: development
     default: true
+
+include:
+  - resources/*.yml
