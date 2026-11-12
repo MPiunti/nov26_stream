@@ -15,6 +15,7 @@ from pyspark.sql.types import (
 BRONZE_TABLE = "workspace.test02_streaming.bronze_people_counter_events"
 STORE_TABLE = "workspace.test02_streaming.dim_store"
 
+
 EVENT_SCHEMA = StructType([
     StructField("event_id", StringType(), True),
     StructField("store_id", StringType(), True),
@@ -25,9 +26,126 @@ EVENT_SCHEMA = StructType([
 ])
 
 
+# ============================================================
+# SILVER TABLE SCHEMA
+# ============================================================
+
+SILVER_SCHEMA = """
+    raw_event STRING
+        COMMENT 'Original JSON event payload received from the source',
+
+    source_topic STRING
+        COMMENT 'Source topic or logical stream identifier',
+
+    source_partition INT
+        COMMENT 'Source partition identifier',
+
+    source_offset BIGINT
+        COMMENT 'Original source offset or sequence identifier',
+
+    source_timestamp TIMESTAMP
+        COMMENT 'Timestamp assigned by the source system',
+
+    ingestion_timestamp TIMESTAMP
+        COMMENT 'Timestamp when the event was ingested into Bronze',
+
+    event_id STRING NOT NULL
+        COMMENT 'Globally unique and immutable business event identifier',
+
+    store_id STRING NOT NULL
+        COMMENT 'Natural business identifier of the store',
+
+    sensor_id STRING
+        COMMENT 'Identifier of the originating people counter sensor',
+
+    event_timestamp_raw STRING
+        COMMENT 'Original event timestamp as provided in the JSON payload',
+
+    event_type STRING
+        COMMENT 'Event classification: ENTRY or EXIT',
+
+    people_count INT
+        COMMENT 'Number of people associated with the event',
+
+    store_timezone_id STRING
+        COMMENT 'IANA timezone identifier associated with the store',
+
+    event_timestamp TIMESTAMP_NTZ
+        COMMENT 'Parsed sensor event timestamp without timezone conversion',
+
+    CONSTRAINT pk_silver_people_counter_events
+        PRIMARY KEY (event_id),
+
+    CONSTRAINT fk_silver_people_counter_store
+        FOREIGN KEY (store_id)
+        REFERENCES workspace.test02_streaming.dim_store(store_id)
+"""
+
+
+# ============================================================
+# QUARANTINE TABLE SCHEMA
+# ============================================================
+
+QUARANTINE_SCHEMA = """
+    raw_event STRING
+        COMMENT 'Original JSON event payload received from the source',
+
+    source_topic STRING
+        COMMENT 'Source topic or logical stream identifier',
+
+    source_partition INT
+        COMMENT 'Source partition identifier',
+
+    source_offset BIGINT
+        COMMENT 'Original source offset or sequence identifier',
+
+    source_timestamp TIMESTAMP
+        COMMENT 'Timestamp assigned by the source system',
+
+    ingestion_timestamp TIMESTAMP
+        COMMENT 'Timestamp when the event was ingested into Bronze',
+
+    event_id STRING
+        COMMENT 'Business event identifier extracted from the payload, when available',
+
+    store_id STRING
+        COMMENT 'Store identifier extracted from the payload, when available',
+
+    sensor_id STRING
+        COMMENT 'Sensor identifier extracted from the payload, when available',
+
+    event_timestamp_raw STRING
+        COMMENT 'Original event timestamp as provided in the JSON payload',
+
+    event_type STRING
+        COMMENT 'Normalized event classification',
+
+    people_count INT
+        COMMENT 'Number of people associated with the event',
+
+    store_timezone_id STRING
+        COMMENT 'IANA timezone identifier, when the store is recognized',
+
+    event_timestamp TIMESTAMP_NTZ
+        COMMENT 'Parsed sensor event timestamp, when valid',
+
+    rejection_reason STRING
+        COMMENT 'One or more validation errors separated by a pipe character',
+
+    record_status STRING
+        COMMENT 'Quarantine lifecycle status: OPEN, RESOLVED or REPROCESSED',
+
+    quarantine_timestamp TIMESTAMP
+        COMMENT 'Timestamp when the record entered quarantine'
+"""
+
+
+# ============================================================
+# EVENT PARSING AND VALIDATION
+# ============================================================
+
 def validated_events():
 
-    # Read Bronze as a streaming source.
     bronze = (
         spark.readStream
             .table(BRONZE_TABLE)
@@ -141,13 +259,14 @@ def validated_events():
     )
 
 
-# ------------------------------------------------------------
+# ============================================================
 # SILVER - Valid events
-# ------------------------------------------------------------
+# ============================================================
 
 @dp.table(
     name="silver_people_counter_events",
     comment="Validated and typed retail people counter events",
+    schema=SILVER_SCHEMA,
     table_properties={
         "quality": "silver",
         "domain": "retail"
@@ -159,16 +278,33 @@ def silver_people_counter_events():
         validated_events()
             .filter(F.col("rejection_reason") == "")
             .drop("rejection_reason")
+            .select(
+                "raw_event",
+                "source_topic",
+                "source_partition",
+                "source_offset",
+                "source_timestamp",
+                "ingestion_timestamp",
+                "event_id",
+                "store_id",
+                "sensor_id",
+                "event_timestamp_raw",
+                "event_type",
+                "people_count",
+                "store_timezone_id",
+                "event_timestamp"
+            )
     )
 
 
-# ------------------------------------------------------------
+# ============================================================
 # QUARANTINE - Invalid events
-# ------------------------------------------------------------
+# ============================================================
 
 @dp.table(
     name="quarantine_people_counter_events",
     comment="Invalid retail people counter events requiring remediation",
+    schema=QUARANTINE_SCHEMA,
     table_properties={
         "quality": "quarantine",
         "domain": "retail"
@@ -181,4 +317,23 @@ def quarantine_people_counter_events():
             .filter(F.col("rejection_reason") != "")
             .withColumn("record_status", F.lit("OPEN"))
             .withColumn("quarantine_timestamp", F.current_timestamp())
-    )
+            .select(
+                "raw_event",
+                "source_topic",
+                "source_partition",
+                "source_offset",
+                "source_timestamp",
+                "ingestion_timestamp",
+                "event_id",
+                "store_id",
+                "sensor_id",
+                "event_timestamp_raw",
+                "event_type",
+                "people_count",
+                "store_timezone_id",
+                "event_timestamp",
+                "rejection_reason",
+                "record_status",
+                "quarantine_timestamp"
+            )
+)
