@@ -1,0 +1,14 @@
+bundle:
+  name: retail-people-counter
+
+variables:
+  catalog:
+    default: workspace
+
+  schema:
+    default: test02_streaming
+
+targets:
+  dev:
+    mode: development
+    default: true
