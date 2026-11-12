@@ -9,3 +9,5 @@ resources:
       libraries:
         - file:
             path: ../src/pipelines/01_bronze.py
+        - file:
+            path: ../src/pipelines/02_silver.py
