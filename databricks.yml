@@ -8,10 +8,10 @@ variables:
   schema:
     default: test02_streaming
 
+include:
+  - resources/*.yml
+
 targets:
   dev:
     mode: development
     default: true
-
-include:
-  - resources/*.yml
