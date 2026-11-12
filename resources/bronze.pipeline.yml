@@ -1,1 +1,12 @@
-eee
+resources:
+  pipelines:
+    retail_people_counter_bronze:
+      name: retail-people-counter-bronze-${bundle.target}
+      catalog: ${var.catalog}
+      schema: ${var.schema}
+      serverless: true
+      development: true
+      continuous: false
+      libraries:
+        - file:
+            path: ../src/pipelines/01_bronze.py
