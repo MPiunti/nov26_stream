@@ -5,8 +5,9 @@ resources:
       catalog: ${var.catalog}
       schema: ${var.schema}
       serverless: true
-      continuous: false
       libraries:
+        - file:
+            path: ../src/pipelines/00_check_tables.py
         - file:
             path: ../src/pipelines/01_bronze.py
         - file:

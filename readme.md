@@ -14,13 +14,14 @@ nov26_stream/
 ├── CLAUDE.md                       Entry point for Claude Code: loads this page
 ├── databricks.yml                  Bundle settings: name, variables, dev and prod targets
 ├── resources/
-│   └── bronze.pipeline.yml         The pipeline: catalog, schema, serverless, source files
+│   └── modeling.peoplecounter.pipeline.yml  The pipeline: catalog, schema, serverless, source files
 ├── src/
 │   ├── pipelines/
+│   │   ├── 00_check_tables.py      Pipeline source: pre-flight check that the input tables exist
 │   │   ├── 01_bronze.py            Pipeline source: bronze streaming ingestion
 │   │   ├── 02_silver.py            Pipeline source: parsing, validation, silver and quarantine tables
 │   │   ├── 04_create_simulated_event_source.sql   Setup: creates the simulated source table
-│   │   ├── 05_insert_simulated_events.sql         Setup: inserts 8 test events (5 valid, 3 invalid)
+│   │   ├── 05_insert_simulated_events.sql         Load: merges 8 test events (5 valid, 3 invalid); idempotent
 │   │   └── 06_validate_simulated_event_source.sql Check: the source table's contents
 │   └── sql/
 │       ├── 01_create_dim_store.sql         Setup: creates the store dimension
@@ -35,7 +36,7 @@ nov26_stream/
 └── .gitignore
 ```
 
-Only `01_bronze.py` and `02_silver.py` are pipeline source files. The numbered `.sql` files are run by hand, in number order, on the SQL warehouse.
+Only `00_check_tables.py`, `01_bronze.py` and `02_silver.py` are pipeline source files. The numbered `.sql` files are run by hand, in number order, on the SQL warehouse.
 
 ## Data flow
 
@@ -43,11 +44,18 @@ Only `01_bronze.py` and `02_silver.py` are pipeline source files. The numbered `
 |---|---|---|
 | Store dimension | `workspace.test02_streaming.dim_store` (200 stores, primary key `store_id`) | `src/sql/01_…` and `02_…`, by hand |
 | Simulated source | `workspace.test02_streaming.simulated_event_source` (append-only, raw JSON) | `src/pipelines/04_…` and `05_…`, by hand |
+| Pre-flight check | Fails the update before anything is loaded if an input table is missing, or if `dim_store` is empty | Pipeline, `00_check_tables.py` |
 | Bronze | `bronze_people_counter_events`: raw events plus `ingestion_timestamp` | Pipeline, `01_bronze.py` |
 | Silver | `silver_people_counter_events`: parsed, typed and valid events, with the store's time zone | Pipeline, `02_silver.py` |
 | Quarantine | `quarantine_people_counter_events`: invalid events with `rejection_reason`, `record_status` = `OPEN` | Pipeline, `02_silver.py` |
 
 All pipeline tables are streaming tables in `workspace.test02_streaming`. The silver table has a primary key on `event_id` and a foreign key on `store_id` to `dim_store`.
+
+**A load iteration:** run `05_insert_simulated_events.sql` (or, later, receive events from Event Hubs), then run the pipeline. The pipeline first runs the pre-flight check, then picks up only the source rows it hasn't processed yet.
+
+**No duplicate source rows:** a source row is identified by `source_topic`, `source_partition` and `source_offset`, the message's identity in Event Hubs. `05_…` inserts with a `MERGE` on those three columns, so running it again inserts nothing. The `MERGE` must stay insert-only (no `WHEN MATCHED`): bronze reads the source table as a stream, and an update or delete there breaks the stream.
+
+**Input tables:** every table the pipeline reads but doesn't create must be listed in `REQUIRED_TABLES` in `00_check_tables.py`.
 
 `event_timestamp` is `TIMESTAMP_NTZ`: the sensor's local time, without time-zone conversion. Every table with a `TIMESTAMP_NTZ` column must set `"delta.feature.timestampNtz": "supported"` in its `table_properties`.
 
@@ -77,7 +85,7 @@ The 8 simulated events give 5 silver rows and 3 quarantine rows: invalid JSON (o
 | **Catalog and schema** | `workspace.test02_streaming`, set by the bundle variables `catalog` and `schema`. The catalog is `workspace`, **not** `main`. |
 | **Git folder** | `/Workspace/Users/michele.piunti@gmail.com/retail_people_counter_bundle`, linked to `github.com/MPiunti/nov26_stream`, branch `main` |
 | **Bundle target** | `dev` (development mode, the default). `prod` deploys to `/Users/michele.piunti@gmail.com/.bundle/retail_people_counter_bundle/prod` and runs as the owner. |
-| **Pipeline** | `retail_people_counter_bronze`, shown as `[dev michele_piunti] retail-people-counter-bronze-dev`. Serverless, triggered (not continuous). |
+| **Pipeline** | `retail_people_counter_bronze`, shown as `[dev michele_piunti] retail-people-counter-bronze-dev`. Serverless, triggered: it runs only when started. Don't set `continuous` (deprecated); to run it continuously, start it from a continuous job. |
 
 ## Tools
 
@@ -133,7 +141,7 @@ The `tests/` folder checks that the project's parts agree with each other, befor
 
 | File | Checks |
 |---|---|
-| `test_project_consistency.py` | Bundle: name, targets, includes, the files the pipeline points to, serverless only. Pipeline code: every table with a `TIMESTAMP_NTZ` column enables `timestampNtz`; table names use the bundle's catalog and schema; every rejection code is in [Validation rules](#validation-rules) and vice versa. Simulated events: the 8 events and their expected outcome. Docs: every test file is listed on this page, and `CLAUDE.md` loads this page and keeps the mandatory rules. |
+| `test_project_consistency.py` | Bundle: name, targets, includes, the files the pipeline points to, serverless only, no deprecated pipeline fields. Pipeline code: the pre-flight check runs first and covers every input table; every table with a `TIMESTAMP_NTZ` column enables `timestampNtz`; table names use the bundle's catalog and schema; every rejection code is in [Validation rules](#validation-rules) and vice versa. Simulated events: the load is an insert-only `MERGE` on topic, partition and offset; offsets are unique; the 8 events and their expected outcome. Docs: every test file is listed on this page, and `CLAUDE.md` loads this page and keeps the mandatory rules. |
 
 **Running them:**
 - **On a PC:** from the repo root, run `python -m unittest discover -s tests`.

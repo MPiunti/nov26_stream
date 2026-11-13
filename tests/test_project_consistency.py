@@ -9,7 +9,10 @@ from datetime import datetime
 
 from helpers import ROOT, constants, parse, path, pipeline_tables, read_text
 
-PIPELINE_FILES = ["src/pipelines/01_bronze.py", "src/pipelines/02_silver.py"]
+CHECK_FILE = "src/pipelines/00_check_tables.py"
+PIPELINE_FILES = [CHECK_FILE, "src/pipelines/01_bronze.py", "src/pipelines/02_silver.py"]
+PIPELINE_YML = ("resources", "modeling.peoplecounter.pipeline.yml")
+INSERT_SQL = ("src", "pipelines", "05_insert_simulated_events.sql")
 
 
 def _bundle_variable_default(name):
@@ -37,7 +40,7 @@ def _store_ids():
 
 def _simulated_events():
     """(offset, raw_event) pairs inserted by 05_insert_simulated_events.sql."""
-    sql = read_text("src", "pipelines", "05_insert_simulated_events.sql")
+    sql = read_text(*INSERT_SQL)
     return [(int(o), e) for o, e in re.findall(r"\(\s*(\d+),\s*'(.*?)'\s*\)", sql, re.S)]
 
 
@@ -93,8 +96,15 @@ class BundleTests(unittest.TestCase):
                 self.assertTrue(os.path.exists(full), f"{os.path.basename(res)} points to missing {rel}")
 
     def test_pipeline_libraries_are_the_python_sources(self):
-        listed = re.findall(r"path:\s*\.\./(\S+)", read_text("resources", "bronze.pipeline.yml"))
+        listed = re.findall(r"path:\s*\.\./(\S+)", read_text(*PIPELINE_YML))
         self.assertEqual(listed, PIPELINE_FILES)
+
+    def test_no_deprecated_pipeline_fields(self):
+        """continuous, development, target and trigger are deprecated in the bundle schema."""
+        for res in glob.glob(path("resources", "**", "*.yml"), recursive=True):
+            for field in ("continuous", "development", "target", "trigger"):
+                self.assertNotRegex(read_text(res), rf"(?m)^\s+{field}:",
+                                    f"{os.path.basename(res)} uses deprecated field {field}")
 
     def test_serverless_only(self):
         for res in glob.glob(path("resources", "**", "*.yml"), recursive=True):
@@ -139,6 +149,26 @@ class PipelineCodeTests(unittest.TestCase):
             selected = re.findall(r'^\s+"(\w+)",?\s*$', body.split(".select(", 1)[1], re.M)
             self.assertEqual(selected, columns, f"{table} selects columns out of step with {schema_name}")
 
+    def test_check_tables_runs_first(self):
+        listed = re.findall(r"path:\s*\.\./(\S+)", read_text(*PIPELINE_YML))
+        self.assertEqual(listed[0], CHECK_FILE)
+        self.assertRegex(read_text(CHECK_FILE), r"(?m)^check_required_tables\(\)\s*$",
+                         "00_check_tables.py must call check_required_tables() at import time")
+
+    def test_every_input_table_is_checked(self):
+        """Each table a pipeline file reads but doesn't create is in REQUIRED_TABLES."""
+        required = set(constants(parse(CHECK_FILE))["REQUIRED_TABLES"])
+        created = set()
+        for f in PIPELINE_FILES:
+            created.update(pipeline_tables(parse(f)))
+        prefix = f"{_bundle_variable_default('catalog')}.{_bundle_variable_default('schema')}."
+        for f in PIPELINE_FILES:
+            for name, value in constants(parse(f)).items():
+                if name.endswith("_TABLE") and value.split(".")[-1] not in created:
+                    self.assertIn(value, required, f"{f} reads {value}, which 00_check_tables.py doesn't check")
+        for table in required:
+            self.assertTrue(table.startswith(prefix), f"REQUIRED_TABLES: {table} isn't in {prefix}*")
+
     def test_rejection_codes_are_documented(self):
         documented = set(re.findall(r"^\| `([A-Z_]+)` \|", read_text("readme.md"), re.M))
         self.assertEqual(_rejection_codes(), documented)
@@ -148,6 +178,21 @@ class SimulatedDataTests(unittest.TestCase):
 
     def test_store_dimension_has_200_stores(self):
         self.assertEqual(len(_store_ids()), 200)
+
+    def test_simulated_events_insert_is_idempotent(self):
+        sql = re.sub(r"--[^\n]*", "", read_text(*INSERT_SQL)).upper()
+        self.assertNotRegex(sql, r"\bINSERT\s+INTO\b", "use MERGE, not INSERT INTO, so reruns add nothing")
+        self.assertIn("MERGE INTO WORKSPACE.TEST02_STREAMING.SIMULATED_EVENT_SOURCE", sql)
+        on_clause = re.search(r"\)\s*AS\s+SOURCE\s+ON\s(.*?)\bWHEN\b", sql, re.S).group(1)
+        for col in ("SOURCE_TOPIC", "SOURCE_PARTITION", "SOURCE_OFFSET"):
+            self.assertIn(f"TARGET.{col}", on_clause, f"the MERGE key must include {col}")
+        self.assertIn("WHEN NOT MATCHED THEN INSERT", sql)
+        self.assertNotIn("WHEN MATCHED", sql.replace("WHEN NOT MATCHED", ""),
+                         "keep the MERGE insert-only; bronze streams from this table")
+
+    def test_simulated_event_offsets_are_unique(self):
+        offsets = [o for o, _ in _simulated_events()]
+        self.assertEqual(len(offsets), len(set(offsets)))
 
     def test_simulated_events_outcome(self):
         stores = _store_ids()
