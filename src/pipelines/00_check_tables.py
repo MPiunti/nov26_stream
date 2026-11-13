@@ -20,12 +20,24 @@ REQUIRED_TABLES = {
 }
 
 
+def _table_exists(spark, table):
+    # spark.catalog.tableExists isn't allowed in pipelines, so resolve the
+    # table's columns instead: a missing table fails with TABLE_OR_VIEW_NOT_FOUND.
+    try:
+        spark.read.table(table).columns
+        return True
+    except Exception as e:
+        if "TABLE_OR_VIEW_NOT_FOUND" in str(e):
+            return False
+        raise
+
+
 def check_required_tables():
     spark = SparkSession.getActiveSession()
     problems = []
 
     for table, (setup_script, needs_rows) in REQUIRED_TABLES.items():
-        if not spark.catalog.tableExists(table):
+        if not _table_exists(spark, table):
             problems.append(f"{table} is missing; create it with {setup_script}")
         elif needs_rows and spark.read.table(table).limit(1).count() == 0:
             problems.append(f"{table} is empty; load it with {setup_script}")

@@ -155,6 +155,12 @@ class PipelineCodeTests(unittest.TestCase):
         self.assertRegex(read_text(CHECK_FILE), r"(?m)^check_required_tables\(\)\s*$",
                          "00_check_tables.py must call check_required_tables() at import time")
 
+    def test_pipeline_code_avoids_blocked_catalog_api(self):
+        """Pipelines block spark.catalog methods (not whitelisted), e.g. tableExists."""
+        for f in PIPELINE_FILES:
+            code = re.sub(r"#[^\n]*", "", read_text(f))
+            self.assertNotIn("spark.catalog.", code, f"{f} uses spark.catalog, which pipelines block")
+
     def test_every_input_table_is_checked(self):
         """Each table a pipeline file reads but doesn't create is in REQUIRED_TABLES."""
         required = set(constants(parse(CHECK_FILE))["REQUIRED_TABLES"])
