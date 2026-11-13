@@ -13,6 +13,11 @@ Pipeline steps and validation rules are in [`readme.md`](../readme.md) ("Data fl
 | `bronze_people_counter_events` | One row per message received | as the source | Pipeline, `01_bronze.py` |
 | `silver_people_counter_events` | One row per valid event | `event_id` (primary key); `store_id` → `dim_store` | Pipeline, `02_silver.py` |
 | `quarantine_people_counter_events` | One row per invalid event | none | Pipeline, `02_silver.py` |
+| `workspace.test02_streaming.dim_client` | One row per registered client | `client_id` (natural) | `src/sql/08_…`, `09_…`; see [`client.md`](client.md) |
+| `workspace.test02_streaming.dim_product` | One row per product | `product_id` (natural) | `src/sql/10_…`, `11_…`; see [`product.md`](product.md) |
+| `workspace.test02_streaming.simulated_sales_source` | One row per sales transaction | `source_topic` + `source_partition` + `source_offset` | `src/sql/12_…`; filled by the app; see [`sales.md`](sales.md) |
+
+All keys are natural keys; the project uses no surrogate keys.
 
 ## 2. Store dimension
 

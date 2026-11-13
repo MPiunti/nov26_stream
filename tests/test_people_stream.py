@@ -240,6 +240,11 @@ class SlidersTests(unittest.TestCase):
         s.set_n_avg("ASIA", 5555)
         self.assertEqual(s.snapshot()["n_avg"], {"EUROPE": 3000, "AMERICAS": 3000, "ASIA": 5600})
 
+    def test_browser_tab_title_is_stable(self):
+        app = read_text(*APP, "app", "app.py")
+        self.assertIn('title="People stream simulator"', app)
+        self.assertIn("update_title=None", app)  # no "Updating..." flicker on every refresh
+
     def test_app_has_three_vertical_sliders(self):
         app = read_text(*APP, "app", "app.py")
         self.assertIn("vertical=True", app)
@@ -405,6 +410,8 @@ class ShopConfigTests(unittest.TestCase):
         rows = shop_config.describe(shop_config.load())
         self.assertEqual([r[1] for r in rows], [
             "10:00 - 20:00", "Europe 3,000 / Americas 3,000 / Asia 3,000", "2,000 - 6,000, step 100",
+            "All regions: SHOES 5%, BAGS 2%, READY_TO_WEAR 6%, ACCESSORIES 3%, TRAVEL 2%, SUNGLASSES 2%",
+            "0% - 100%, step 1",
             "240 s = 24 h", "48 h = 480 s", "5 s = 30 min"])
         self.assertIn("parameters_card()", read_text(*APP, "app", "app.py"))
         self.assertNotIn("SIM_TICK_SECONDS", read_text(*APP, "app", "app.yaml"))
@@ -444,8 +451,10 @@ class AppBundleTests(unittest.TestCase):
         self.assertIn("source_code_path: ../app", res)
         grants = re.findall(r"securable_full_name: \$\{var\.catalog\}\.\$\{var\.schema\}\.(\w+)\s*\n\s*"
                             r"securable_type: TABLE\s*\n\s*permission: (\w+)", res)
-        self.assertEqual(sorted(grants), [("dim_store", "SELECT"), ("simulated_event_source", "MODIFY"),
-                                          ("simulated_event_source", "SELECT")])
+        self.assertEqual(sorted(grants), [("dim_client", "SELECT"), ("dim_product", "SELECT"),
+                                          ("dim_store", "SELECT"),
+                                          ("simulated_event_source", "MODIFY"), ("simulated_event_source", "SELECT"),
+                                          ("simulated_sales_source", "MODIFY"), ("simulated_sales_source", "SELECT")])
         self.assertIn("permission: CAN_USE", res)
 
     def test_app_yaml_tables_match_bundle_variables(self):

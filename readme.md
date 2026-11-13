@@ -5,7 +5,7 @@ A Databricks learning project that ingests anonymous retail people-counter event
 | Bundle | Folder | Contents |
 |---|---|---|
 | `retail_people_counter_bundle` | repo root | The pipeline |
-| `retail_people_stream_bundle` | `apps/people_stream/` | The people-stream simulator app, which feeds the pipeline's source table; see [`doc/people_stream.md`](doc/people_stream.md) |
+| `retail_people_stream_bundle` | `apps/people_stream/` | The people-stream simulator app, which feeds the pipeline's source table, and its sales simulator, which feeds the sales source table; see [`doc/people_stream.md`](doc/people_stream.md) and [`doc/sales.md`](doc/sales.md) |
 
 The events come from a simulated source table for now, so pipeline development doesn't depend on Event Hubs. All data is synthetic.
 
@@ -20,7 +20,10 @@ nov26_stream/
 ├── CLAUDE.md                       Entry point for Claude Code: loads this page and agents.md
 ├── doc/
 │   ├── dataset.md                  Stores, macro regions, people-flow streaming, opening hours, volumes
-│   └── people_stream.md            The people-stream simulator app: screen, time model, generator, writes
+│   ├── people_stream.md            The people-stream simulator app: screen, time model, generator, writes
+│   ├── sales.md                    The sales simulator: purchase probabilities, transactions, natural keys
+│   ├── client.md                   The client dimension: natural client_id, 250 clients per store per country
+│   └── product.md                  The product dimension: natural product_id, six categories, prices
 ├── databricks.yml                  Pipeline bundle settings: name, variables, dev and prod targets; excludes apps/
 ├── apps/
 │   └── people_stream/              Separate bundle: the people-stream simulator app
@@ -33,6 +36,7 @@ nov26_stream/
 │           ├── shop_config.yml     Store and simulation parameters: opening hours, N_AVG_PEOPLE defaults and range, day length, run length, batch interval
 │           ├── shop_config.py      Reads and checks shop_config.yml; standard library only
 │           ├── simulator.py        Event generator and run loop; standard library only
+│           ├── sales.py            Sales simulator: purchases from EXIT events; standard library only
 │           ├── warehouse.py        Reads stores and offsets, inserts events through the SQL warehouse
 │           ├── app.yaml            Start command and environment variables (warehouse, table names)
 │           └── requirements.txt    Pinned packages, installed by Databricks on deploy
@@ -50,12 +54,19 @@ nov26_stream/
 │       ├── 04_create_simulated_event_source.sql   Setup: creates the simulated source table
 │       ├── 05_insert_simulated_events.sql         Load: merges 8 test events (5 valid, 3 invalid); idempotent
 │       ├── 06_validate_simulated_event_source.sql Check: the source table's contents
-│       └── 07_validate_bronze.sql.dbquery.ipynb   Check: the bronze table's contents
+│       ├── 07_validate_bronze.sql.dbquery.ipynb   Check: the bronze table's contents
+│       ├── 08_create_dim_client.sql               Setup: creates the client dimension (natural key client_id)
+│       ├── 09_populate_dim_client.sql             Setup: loads 50,000 clients, 250 per store per country (idempotent MERGE)
+│       ├── 10_create_dim_product.sql              Setup: creates the product dimension (natural key product_id)
+│       ├── 11_populate_dim_product.sql            Setup: loads 120 products, 20 per category (idempotent MERGE)
+│       ├── 12_create_simulated_sales_source.sql   Setup: creates the simulated sales source table
+│       └── 13_validate_dim_client_product.sql     Check: client and product counts, keys, formats
 ├── tests/                          Tests of the bundle, pipeline code and docs
 │   ├── helpers.py                  Shared helpers for the tests
 │   ├── test_project_consistency.py Tests of the bundle, pipeline code and docs
 │   ├── test_dataset.py             Tests of the dataset rules in doc/dataset.md
 │   ├── test_people_stream.py       Tests of the simulator app, its bundle and doc/people_stream.md
+│   ├── test_sales.py               Tests of the sales simulator, clients, products and their docs
 │   └── run_tests.py                Notebook that runs all tests in Databricks
 ├── pyproject.toml, uv.lock         Local Python environment (Databricks Connect), managed by `databricks environments setup-local`
 └── .gitignore
@@ -69,6 +80,9 @@ Only the files in `src/pipelines/` are pipeline source files, and the pipeline l
 |---|---|---|
 | Store dimension | `workspace.test02_streaming.dim_store` (200 stores, primary key `store_id`, `macro_region` EUROPE / AMERICAS / ASIA); see [`doc/dataset.md`](doc/dataset.md) | `src/sql/01_…` and `02_…`, by hand |
 | Simulated source | `workspace.test02_streaming.simulated_event_source` (append-only, raw JSON) | Created by `src/sql/04_…`; filled by `05_…` by hand, and by the people-stream app |
+| Client dimension | `workspace.test02_streaming.dim_client` (50,000 clients, primary key `client_id`); see [`doc/client.md`](doc/client.md) | `src/sql/08_…` and `09_…`, by hand |
+| Product dimension | `workspace.test02_streaming.dim_product` (120 products, primary key `product_id`); see [`doc/product.md`](doc/product.md) | `src/sql/10_…` and `11_…`, by hand |
+| Sales source | `workspace.test02_streaming.simulated_sales_source` (append-only, raw JSON transactions); not read by the pipeline yet; see [`doc/sales.md`](doc/sales.md) | Created by `src/sql/12_…`; filled by the people-stream app |
 | Pre-flight check | Fails the update before anything is loaded if an input table is missing, or if `dim_store` is empty | Pipeline, `00_check_tables.py` |
 | Bronze | `bronze_people_counter_events`: raw events plus `ingestion_timestamp` | Pipeline, `01_bronze.py` |
 | Silver | `silver_people_counter_events`: parsed, typed and valid events, with the store's time zone | Pipeline, `02_silver.py` |
@@ -130,7 +144,7 @@ The 8 simulated events give 5 silver rows and 3 quarantine rows: invalid JSON (o
 | Check the bundle | `& $db bundle validate --strict -t dev --profile MPiunti` |
 | Get the latest code into Databricks | Owner pushes to `main`, then in the Git folder: **Pull** (or `& $db repos update <repo-id> --branch main --profile MPiunti`) |
 | Deploy the pipeline | In the Git folder: **Deployments** (rocket) → `dev` → **Deploy**. Or `& $db bundle deploy -t dev --profile MPiunti`, from the repo root. |
-| Deploy and start the app | From `apps/people_stream/`: `& $db bundle deploy -t dev --profile MPiunti`, then `& $db bundle run people_stream -t dev --profile MPiunti`. Or open `apps/people_stream/` in the Git folder and use **Deployments**. Run `src/sql/01_…`, `02_…` and `04_…` first. See [`doc/people_stream.md`](doc/people_stream.md) §9. |
+| Deploy and start the app | From `apps/people_stream/`: `& $db bundle deploy -t dev --profile MPiunti`, then `& $db bundle run people_stream -t dev --profile MPiunti`. Or open `apps/people_stream/` in the Git folder and use **Deployments**. Run `src/sql/01_…`, `02_…`, `04_…` and, for sales, `08_…` to `12_…` first. See [`doc/people_stream.md`](doc/people_stream.md) §9. |
 | Run the pipeline | Pipeline UI → **Start**, or `& $db bundle run retail_people_counter_bronze -t dev --profile MPiunti` |
 | Rebuild silver and quarantine | Pipeline UI → **Full refresh selection** on the two tables. Needed after a change to a table's schema or table features, because a normal update doesn't change an existing table's features. |
 | Run the tests on a PC | `python -m unittest discover -s tests`. See [Tests](#tests). |
@@ -170,6 +184,7 @@ The `tests/` folder checks that the project's parts agree with each other, befor
 |---|---|
 | `test_project_consistency.py` | Bundle: name, targets, includes, the files the pipeline points to, serverless only, no deprecated pipeline fields. Pipeline code: the pre-flight check runs first and covers every input table; every table with a `TIMESTAMP_NTZ` column enables `timestampNtz`; table names use the bundle's catalog and schema; every rejection code is in [Validation rules](#validation-rules) and vice versa. Simulated events: the load is an insert-only `MERGE` on topic, partition and offset; offsets are unique; the 8 events and their expected outcome. Docs: every test file is listed on this page, and `CLAUDE.md` loads this page and keeps the mandatory rules. |
 | `test_dataset.py` | The rules in [`doc/dataset.md`](doc/dataset.md): the store distribution and totals match `02_populate_dim_store.sql`; `macro_region` is defined in the create, migration, populate and validate scripts, and every country maps to one macro region the same way in each; the validation script's expected counts match; at least one store is open at every UTC hour, in winter and summer; the `N_AVG_PEOPLE_*` defaults. `agents.md` lists every page in `doc/`, and its links work. |
+| `test_sales.py` | The sales simulator, clients and products, against [`doc/sales.md`](doc/sales.md), [`doc/client.md`](doc/client.md) and [`doc/product.md`](doc/product.md): buyers per category match PURCHASE_PROB; only EXITs trigger sales; each transaction names the exit's store, a client of the store's country and a product of the category at list price, at the exit's time; transaction IDs and offsets; the client and product scripts generate what the docs say (50,000 clients, 120 products, ID formats, prices); the six categories agree everywhere; the sales source has the same envelope as the people source; the app has 18 probability sliders and writes sales after people. |
 | `test_people_stream.py` | The simulator app, against [`doc/people_stream.md`](doc/people_stream.md): 240 s per simulated day and 10 s per hour; START uses the current time and begins from scratch; a run finishes by itself after 48 simulated hours (480 s), and STOP quits the generator; slider range, step and default; daily visitors per store match each region's `N_AVG_PEOPLE`; events only during local opening hours; people in = people out for every store and local day that reaches closing within the run; every event passes the silver rules; topic, partition per region and consecutive offsets; a failed write stops the run; the chart history is cumulative per region for entries and exits, never has more out than in, and ends at 48 hours; the charts are only on the Counters tab; the per-date bars sum people per store-local date and region; the headline shows the simulated hour only while running. `shop_config.yml` holds every parameter, the simulator and app take them from it (no hard-coded values), the app shows them, and bad files are rejected. The insert is an insert-only `MERGE` on topic, partition and offset. The app bundle is separate from the pipeline bundle, grants exactly the table permissions the app uses, and pins its packages. The time-zone tests need `tzdata` on Windows and are skipped without it. |
 
 **Running them:**

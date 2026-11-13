@@ -8,12 +8,17 @@ import os
 import re
 import threading
 
+import sales
 from simulator import PARTITION, SOURCE_TOPIC, Store
 
 DEFAULT_TABLES = {
     "STORE_TABLE": "workspace.test02_streaming.dim_store",
     "SOURCE_TABLE": "workspace.test02_streaming.simulated_event_source",
+    "CLIENT_TABLE": "workspace.test02_streaming.dim_client",
+    "PRODUCT_TABLE": "workspace.test02_streaming.dim_product",
+    "SALES_TABLE": "workspace.test02_streaming.simulated_sales_source",
 }
+CHUNK_ROWS = 1000  # rows per MERGE statement
 
 
 def table(var):
@@ -28,9 +33,19 @@ def stores_sql(store_table):
             f"WHERE is_active ORDER BY store_id")
 
 
-def offsets_sql(source_table):
+def offsets_sql(source_table, topic=SOURCE_TOPIC):
+    if not re.fullmatch(r"[a-z0-9-]+", topic):
+        raise ValueError(f"bad topic {topic!r}")
     return (f"SELECT source_partition, MAX(source_offset) AS max_offset FROM {source_table} "
-            f"WHERE source_topic = '{SOURCE_TOPIC}' GROUP BY source_partition")
+            f"WHERE source_topic = '{topic}' GROUP BY source_partition")
+
+
+def products_sql(product_table):
+    return f"SELECT product_id, category, list_price FROM {product_table} WHERE is_active ORDER BY product_id"
+
+
+def clients_sql(client_table):
+    return f"SELECT client_id, country_code FROM {client_table} WHERE is_active"
 
 
 def _literal(value):
@@ -122,11 +137,35 @@ class Warehouse:
                                "run src/sql/02_populate_dim_store.sql.")
         return stores
 
-    def load_offsets(self):
+    def _next_offsets(self, table_var, topic):
         """Next offset per partition: continue after what earlier runs wrote."""
-        rows = self._execute(offsets_sql(table("SOURCE_TABLE")), fetch=True)
+        rows = self._execute(offsets_sql(table(table_var), topic), fetch=True)
         found = {int(r[0]): int(r[1]) for r in rows}
         return {p: found.get(p, 0) + 1 for p in PARTITION.values()}
 
+    def load_offsets(self):
+        return self._next_offsets("SOURCE_TABLE", SOURCE_TOPIC)
+
+    def load_sales_offsets(self):
+        return self._next_offsets("SALES_TABLE", sales.SALES_TOPIC)
+
+    def load_catalog(self):
+        try:
+            products = [sales.Product(r[0], r[1], float(r[2]))
+                        for r in self._execute(products_sql(table("PRODUCT_TABLE")), fetch=True)]
+            clients = [(r[0], r[1]) for r in self._execute(clients_sql(table("CLIENT_TABLE")), fetch=True)]
+        except Exception as exc:
+            if "TABLE_OR_VIEW_NOT_FOUND" in str(exc):
+                raise RuntimeError("dim_product or dim_client is missing: run src/sql/08 to 11 first.") from exc
+            raise
+        return sales.Catalog(products, clients)
+
+    def _write_chunks(self, table_var, rows):
+        for i in range(0, len(rows), CHUNK_ROWS):
+            self._execute(insert_sql(table(table_var), rows[i:i + CHUNK_ROWS]))
+
     def write(self, rows):
-        self._execute(insert_sql(table("SOURCE_TABLE"), rows))
+        self._write_chunks("SOURCE_TABLE", rows)
+
+    def write_sales(self, rows):
+        self._write_chunks("SALES_TABLE", rows)

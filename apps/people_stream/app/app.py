@@ -1,11 +1,12 @@
-"""People-stream simulator app: START/STOP the simulated people flow and set N_AVG_PEOPLE per region.
+"""People-stream simulator app: START/STOP the simulated people flow and the sales it generates.
 
-See doc/people_stream.md. One simulation runs per app process and is shared by every viewer.
+Sliders set N_AVG_PEOPLE per region (vertical) and PURCHASE_PROB per region and category (horizontal).
+See doc/people_stream.md and doc/sales.md. One simulation runs per app process, shared by every viewer.
 """
 import os
 
 import dash_bootstrap_components as dbc
-from dash import Dash, Input, Output, State, ctx, dcc, html, no_update
+from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
 
 import charts
 import shop_config
@@ -18,14 +19,22 @@ simulation = sim.Simulation(
     load_offsets=wh.load_offsets,
     write=wh.write,
     tick_seconds=sim.DEFAULT_TICK_SECONDS,
+    load_catalog=wh.load_catalog,
+    load_sales_offsets=wh.load_sales_offsets,
+    write_sales=wh.write_sales,
 )
+CATEGORY_LABEL = {"SHOES": "Shoes", "BAGS": "Bags", "READY_TO_WEAR": "Ready-to-wear", "ACCESSORIES": "Accessories",
+                  "TRAVEL": "Travel", "SUNGLASSES": "Sunglasses"}
 CFG = sim.CONFIG  # from shop_config.yml, read once at start
 
 REGION_LABEL = {"EUROPE": "Europe", "AMERICAS": "Americas", "ASIA": "Asia"}
 STATE_COLOR = {"RUNNING": "success", "STARTING": "info", "STOPPED": "secondary", "FINISHED": "primary",
                "FAILED": "danger"}
 
-app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], title="People stream simulator")
+# update_title=None: keep the browser tab title fixed; by default Dash shows "Updating..." during every
+# callback, which flickers with the 1-second refresh.
+app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], title="People stream simulator",
+           update_title=None)
 server = app.server
 
 
@@ -47,7 +56,18 @@ def parameters_card():
     ], className="mb-3 shadow-sm")
 
 
-def equalizer(region, value):
+def probability_slider(region, category, value):
+    return dbc.Row([
+        dbc.Col(html.Span(CATEGORY_LABEL[category], className="small"), xs=4, className="text-end pe-0"),
+        dbc.Col(dcc.Slider(
+            id={"type": "prob", "region": region, "category": category},
+            min=sim.PROB_MIN, max=sim.PROB_MAX, step=sim.PROB_STEP, value=value, marks=None,
+            tooltip={"placement": "right", "always_visible": True, "template": "{value}%"},
+        ), xs=8, className="ps-1"),
+    ], className="g-0 align-items-center mb-1")
+
+
+def equalizer(region, value, probs):
     return dbc.Col([
         html.Div(REGION_LABEL[region], className="fw-semibold text-center"),
         html.Div(f"N_AVG_PEOPLE_{'AMERICA' if region == 'AMERICAS' else region}",
@@ -60,7 +80,9 @@ def equalizer(region, value):
             tooltip={"placement": "right", "always_visible": True},
         ), className="d-flex justify-content-center"),
         html.Div(id={"type": "region-stats", "region": region}, className="small text-center mt-2"),
-    ], xs=4)
+        html.Div("PURCHASE_PROB per person leaving (%)", className="small text-muted text-center mt-3 mb-1"),
+        html.Div([probability_slider(region, c, probs[c]) for c in sim.CATEGORIES]),
+    ], md=4)
 
 
 def chart_card(title, graph_id, figure):
@@ -72,11 +94,13 @@ def chart_card(title, graph_id, figure):
 
 def simulator_tab(n_avg):
     """Controls only: sliders, parameters and stream status. The charts are on the Counters tab."""
+    probs = simulation.snapshot()["purchase_prob"]
     return [
         dbc.Card([
-            dbc.CardHeader("Average visitors per store per day, by region"),
+            dbc.CardHeader("Average visitors per store per day (vertical) and purchase probability "
+                           "per category (horizontal), by region"),
             dbc.CardBody([
-                dbc.Row([equalizer(r, n_avg[r]) for r in sim.REGIONS]),
+                dbc.Row([equalizer(r, n_avg[r], probs[r]) for r in sim.REGIONS]),
                 dbc.Button("Reset to defaults", id="reset", color="link", size="sm", className="mt-2"),
             ]),
         ], className="mb-3 shadow-sm"),
@@ -90,6 +114,8 @@ def counters_tab():
     snapshot = simulation.snapshot()
     return [
         dbc.Card([dbc.CardHeader("In, out and still inside, by region"), dbc.CardBody(id="exit-stats")],
+                 className="mb-3 shadow-sm"),
+        dbc.Card([dbc.CardHeader("Sales transactions by region and category"), dbc.CardBody(id="sales-stats")],
                  className="mb-3 shadow-sm"),
         dbc.Card([
             dbc.CardHeader(dbc.Row([
@@ -140,6 +166,7 @@ def serve_layout():
         dcc.Interval(id="tick", interval=1000),
         dcc.Store(id="sink-buttons"),
         dcc.Store(id="sink-sliders"),
+        dcc.Store(id="sink-probs"),
         dcc.Store(id="chart-version"),
     ], fluid=False)
 
@@ -160,9 +187,19 @@ def start_stop(_start, _stop):
 @app.callback(Output({"type": "n-avg", "region": sim.REGIONS[0]}, "value"),
               Output({"type": "n-avg", "region": sim.REGIONS[1]}, "value"),
               Output({"type": "n-avg", "region": sim.REGIONS[2]}, "value"),
+              Output({"type": "prob", "region": ALL, "category": ALL}, "value"),
               Input("reset", "n_clicks"), prevent_initial_call=True)
 def reset(_):
-    return [sim.N_AVG_DEFAULTS[r] for r in sim.REGIONS]
+    probs = [sim.PURCHASE_PROB_DEFAULTS[o["id"]["region"]][o["id"]["category"]] for o in ctx.outputs_list[3]]
+    return [sim.N_AVG_DEFAULTS[r] for r in sim.REGIONS] + [probs]
+
+
+@app.callback(Output("sink-probs", "data"), Input({"type": "prob", "region": ALL, "category": ALL}, "value"))
+def set_purchase_prob(_values):
+    for item in ctx.inputs_list[0]:
+        if item.get("value") is not None:
+            simulation.set_purchase_prob(item["id"]["region"], item["id"]["category"], item["value"])
+    return simulation.snapshot()["purchase_prob"]
 
 
 @app.callback(Output("sink-sliders", "data"),
@@ -177,21 +214,41 @@ def set_n_avg(*values):
 
 
 @app.callback(Output("entries-chart", "figure"), Output("exits-chart", "figure"), Output("exit-stats", "children"),
+              Output("sales-stats", "children"),
               Output("chart-version", "data"),
               Input("tick", "n_intervals"), State("chart-version", "data"))
 def refresh_chart(_, version):
     s = simulation.snapshot()
     current = f"{s['run_id']}:{len(s['history'])}"
     if current == version:  # redraw only when a new batch arrived
-        return no_update, no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update, no_update
     return (charts.cumulative_entries(s, sim.MAX_RUN_SIM_HOURS), charts.cumulative_exits(s, sim.MAX_RUN_SIM_HOURS),
-            exit_stats(s), current)
+            exit_stats(s), sales_stats(s), current)
 
 
 @app.callback(Output("daily-chart", "figure"), Input("daily-kind", "value"), Input("chart-version", "data"))
 def refresh_daily(kind, _version):
     """Redraw on a new batch (chart-version changes) or when people in / out is switched."""
     return charts.daily_bars(simulation.snapshot(), kind or "exits")
+
+
+def sales_stats(s):
+    """Per region: transactions per category, total transactions, amount and transactions per person out."""
+    header = html.Thead(html.Tr([html.Th("Region")] + [html.Th(CATEGORY_LABEL[c], className="text-end")
+                                                       for c in sim.CATEGORIES]
+                                + [html.Th("Transactions", className="text-end"),
+                                   html.Th("Amount (EUR)", className="text-end"),
+                                   html.Th("Per person out", className="text-end")]))
+    rows = []
+    for r in sim.REGIONS:
+        x = s["sales"][r]
+        per_person = x["transactions"] / s["exits"][r] if s["exits"][r] else 0
+        rows.append(html.Tr([html.Td(REGION_LABEL[r])]
+                            + [html.Td(f"{x['by_category'][c]:,}", className="text-end") for c in sim.CATEGORIES]
+                            + [html.Td(f"{x['transactions']:,}", className="text-end fw-semibold"),
+                               html.Td(f"{x['amount']:,.0f}", className="text-end"),
+                               html.Td(f"{per_person:.1%}", className="text-end")]))
+    return dbc.Table([header, html.Tbody(rows)], size="sm", responsive=True, className="mb-0")
 
 
 def exit_stats(s):

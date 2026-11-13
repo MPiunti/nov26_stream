@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import sales
 import shop_config
 
 CONFIG = shop_config.load()
@@ -34,6 +35,9 @@ OPEN_MINUTES = (CLOSE_HOUR - OPEN_HOUR) * 60
 REGIONS = shop_config.REGIONS
 N_AVG_DEFAULTS = dict(CONFIG.n_avg_default)
 N_AVG_MIN, N_AVG_MAX, N_AVG_STEP = CONFIG.n_avg_min, CONFIG.n_avg_max, CONFIG.n_avg_step
+CATEGORIES = shop_config.CATEGORIES
+PURCHASE_PROB_DEFAULTS = {r: dict(CONFIG.purchase_prob_default[r]) for r in REGIONS}
+PROB_MIN, PROB_MAX, PROB_STEP = CONFIG.prob_min, CONFIG.prob_max, CONFIG.prob_step
 
 SOURCE_TOPIC = "people-counter-app"
 PARTITION = {"EUROPE": 0, "AMERICAS": 1, "ASIA": 2}  # one Event Hubs partition per macro region
@@ -67,6 +71,12 @@ def headline_time(snapshot):
     if snapshot.get("state") != "RUNNING" or not snapshot.get("sim_utc"):
         return ""
     return f"{str(snapshot['sim_utc'])[:13].replace('T', ' ')}:00 UTC"
+
+
+def clamp_prob(value):
+    """Slider value -> valid PURCHASE_PROB percent: within [PROB_MIN, PROB_MAX], on the step grid."""
+    value = PROB_MIN + int(round((float(value) - PROB_MIN) / PROB_STEP)) * PROB_STEP
+    return max(PROB_MIN, min(PROB_MAX, value))
 
 
 def clamp_n_avg(value):
@@ -211,17 +221,24 @@ class Simulation:
     """START/STOP lifecycle: a background thread that ticks the generator and writes each batch.
 
     load_stores() -> [Store]; load_offsets() -> {partition: next offset}; write(rows) inserts them.
+    Sales (optional, doc/sales.md): load_catalog() -> sales.Catalog; load_sales_offsets() -> {partition:
+    next offset}; write_sales(rows) inserts the transactions. Without load_catalog no sales are made.
     """
 
     def __init__(self, load_stores, load_offsets, write, tick_seconds=DEFAULT_TICK_SECONDS,
-                 clock=time.monotonic, now=lambda: datetime.now(timezone.utc)):
+                 clock=time.monotonic, now=lambda: datetime.now(timezone.utc),
+                 load_catalog=None, load_sales_offsets=None, write_sales=None):
         self._load_stores, self._load_offsets, self._write = load_stores, load_offsets, write
+        self._load_catalog = load_catalog
+        self._load_sales_offsets = load_sales_offsets or (lambda: {})
+        self._write_sales = write_sales or (lambda rows: None)
         self.tick_seconds = tick_seconds
         self._clock, self._now = clock, now
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = None
         self.n_avg = dict(N_AVG_DEFAULTS)
+        self.purchase_prob = {r: dict(PURCHASE_PROB_DEFAULTS[r]) for r in REGIONS}
         self._reset_status()
 
     def _reset_status(self):
@@ -234,7 +251,15 @@ class Simulation:
                        "open_stores": {r: 0 for r in REGIONS}, "stores": {r: 0 for r in REGIONS},
                        "last_batch_rows": 0, "error": None,
                        # Cumulative people_count of ENTRY and of EXIT events per region, one point per batch.
-                       "history": []}
+                       "history": [],
+                       # Sales so far: per region, transactions, amount (EUR) and transactions per category.
+                       "sales": {r: {"transactions": 0, "amount": 0.0, "by_category": {c: 0 for c in CATEGORIES}}
+                                 for r in REGIONS},
+                       "sales_rows_written": 0}
+
+    def set_purchase_prob(self, region, category, value):
+        with self._lock:
+            self.purchase_prob[region][category] = clamp_prob(value)
 
     def set_n_avg(self, region, value):
         with self._lock:
@@ -263,6 +288,10 @@ class Simulation:
         try:
             stores = self._load_stores()
             generator = Generator(stores, self._load_offsets())
+            seller = None
+            if self._load_catalog is not None:
+                seller = sales.SalesGenerator(self._load_catalog(), {s.store_id: s.store_id[:2] for s in stores},
+                                              self._load_sales_offsets(), run_id=generator.run_id)
             start_real, start_utc = self._clock(), self._now()
             end_utc = start_utc + timedelta(hours=MAX_RUN_SIM_HOURS)
             with self._lock:
@@ -284,9 +313,13 @@ class Simulation:
                 sim_to = min(sim_time(start_utc, elapsed), end_utc)
                 with self._lock:
                     n_avg = dict(self.n_avg)
+                    prob = {r: dict(self.purchase_prob[r]) for r in REGIONS}
                 rows = generator.tick(sim_from, sim_to, n_avg)
+                sale_rows = seller.sales_for(rows, prob) if seller else []
                 if rows:
                     self._write(rows)
+                if sale_rows:
+                    self._write_sales(sale_rows)
                 with self._lock:
                     st = self.status
                     st["sim_utc"], st["batches"] = sim_to, st["batches"] + 1
@@ -301,6 +334,13 @@ class Simulation:
                         day = st["daily"].setdefault(event["event_timestamp"][:10],
                                                      {r: {"entries": 0, "exits": 0} for r in REGIONS})
                         day[region][kind] += event["people_count"]
+                    for row in sale_rows:
+                        tx = json.loads(row["raw_event"])
+                        region_sales = st["sales"][REGIONS[row["source_partition"]]]
+                        region_sales["transactions"] += 1
+                        region_sales["amount"] = round(region_sales["amount"] + tx["amount"], 2)
+                        region_sales["by_category"][tx["category"]] += 1
+                    st["sales_rows_written"] += len(sale_rows)
                     st["error"] = None
                     st["remaining_seconds"] = max(0.0, MAX_RUN_REAL_SECONDS - elapsed)
                     st["history"].append({"sim_utc": sim_to, "entries": dict(st["entries"]),
@@ -315,4 +355,5 @@ class Simulation:
 
     def snapshot(self):
         with self._lock:
-            return json.loads(json.dumps({**self.status, "n_avg": dict(self.n_avg)}, default=str))
+            return json.loads(json.dumps({**self.status, "n_avg": dict(self.n_avg),
+                                          "purchase_prob": self.purchase_prob}, default=str))

@@ -6,7 +6,7 @@ resources:
       # The start command and environment variables are in app/app.yaml.
       source_code_path: ../app
       # Granted to the app's service principal on deploy. dim_store and simulated_event_source
-      # must already exist: run src/sql/01, 02 and 04 of the pipeline bundle first.
+      # must already exist: run src/sql/01, 02 and 04 of the pipeline bundle first (08 to 12 for sales).
       resources:
         - name: sql-warehouse
           sql_warehouse:
@@ -25,5 +25,26 @@ resources:
         - name: source-table-write
           uc_securable:
             securable_full_name: ${var.catalog}.${var.schema}.simulated_event_source
+            securable_type: TABLE
+            permission: MODIFY
+        # Sales simulator (doc/sales.md): run src/sql/08 to 12 first.
+        - name: client-table
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.schema}.dim_client
+            securable_type: TABLE
+            permission: SELECT
+        - name: product-table
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.schema}.dim_product
+            securable_type: TABLE
+            permission: SELECT
+        - name: sales-table-read
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.schema}.simulated_sales_source
+            securable_type: TABLE
+            permission: SELECT
+        - name: sales-table-write
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.schema}.simulated_sales_source
             securable_type: TABLE
             permission: MODIFY

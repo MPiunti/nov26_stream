@@ -10,10 +10,13 @@ from dataclasses import dataclass
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shop_config.yml")
 REGIONS = ("EUROPE", "AMERICAS", "ASIA")
+CATEGORIES = ("SHOES", "BAGS", "READY_TO_WEAR", "ACCESSORIES", "TRAVEL", "SUNGLASSES")
 
 _SCHEMA = {
     "stores": {"opening_hour": int, "closing_hour": int},
     "n_avg_people": {"default": {r: int for r in REGIONS}, "min": int, "max": int, "step": int},
+    "purchase_prob": {"default": {r: {c: int for c in CATEGORIES} for r in REGIONS},
+                      "min": int, "max": int, "step": int},
     "simulation": {"real_seconds_per_sim_day": int, "max_run_sim_hours": int, "tick_seconds": int},
 }
 
@@ -26,6 +29,10 @@ class ShopConfig:
     n_avg_min: int
     n_avg_max: int
     n_avg_step: int
+    purchase_prob_default: dict  # {region: {category: percent}}
+    prob_min: int
+    prob_max: int
+    prob_step: int
     real_seconds_per_sim_day: int
     max_run_sim_hours: int
     tick_seconds: int
@@ -93,10 +100,12 @@ def load(path=CONFIG_PATH):
     with open(path, encoding="utf-8") as f:
         data = parse(f.read())
     _check_shape(data, _SCHEMA)
-    s, n, sim = data["stores"], data["n_avg_people"], data["simulation"]
+    s, n, p, sim = data["stores"], data["n_avg_people"], data["purchase_prob"], data["simulation"]
     cfg = ShopConfig(
         opening_hour=s["opening_hour"], closing_hour=s["closing_hour"],
         n_avg_default=dict(n["default"]), n_avg_min=n["min"], n_avg_max=n["max"], n_avg_step=n["step"],
+        purchase_prob_default={r: dict(p["default"][r]) for r in REGIONS},
+        prob_min=p["min"], prob_max=p["max"], prob_step=p["step"],
         real_seconds_per_sim_day=sim["real_seconds_per_sim_day"], max_run_sim_hours=sim["max_run_sim_hours"],
         tick_seconds=sim["tick_seconds"],
     )
@@ -110,6 +119,16 @@ def load(path=CONFIG_PATH):
     for region, value in cfg.n_avg_default.items():
         if not cfg.n_avg_min <= value <= cfg.n_avg_max or (value - cfg.n_avg_min) % cfg.n_avg_step:
             problems.append(f"n_avg_people.default.{region}: {value} must be in min..max, on the step grid")
+    if not 0 <= cfg.prob_min < cfg.prob_max <= 100 or cfg.prob_step <= 0:
+        problems.append("purchase_prob: need 0 <= min < max <= 100 and step > 0")
+    elif (cfg.prob_max - cfg.prob_min) % cfg.prob_step:
+        problems.append("purchase_prob: max - min must be a multiple of step")
+    else:
+        for region, by_category in cfg.purchase_prob_default.items():
+            for category, value in by_category.items():
+                if not cfg.prob_min <= value <= cfg.prob_max or (value - cfg.prob_min) % cfg.prob_step:
+                    problems.append(f"purchase_prob.default.{region}.{category}: {value} must be in "
+                                    "min..max, on the step grid")
     if cfg.real_seconds_per_sim_day <= 0 or cfg.max_run_sim_hours <= 0:
         problems.append("simulation: real_seconds_per_sim_day and max_run_sim_hours must be > 0")
     elif not 0 < cfg.tick_seconds <= cfg.max_run_real_seconds:
@@ -123,6 +142,14 @@ def _num(x):
     return f"{x:g}" if isinstance(x, float) else f"{x:,}"
 
 
+def _probabilities(by_region):
+    def one(d):
+        return ", ".join(f"{c} {d[c]}%" for c in CATEGORIES)
+    if all(by_region[r] == by_region[REGIONS[0]] for r in REGIONS):
+        return "All regions: " + one(by_region[REGIONS[0]])
+    return " / ".join(f"{r.title()}: {one(by_region[r])}" for r in REGIONS)
+
+
 def describe(cfg):
     """(parameter, value, meaning) rows for the app's Parameters panel."""
     d = cfg.n_avg_default
@@ -133,6 +160,10 @@ def describe(cfg):
          "Average visitors per store per simulated day; slider start values"),
         ("n_avg_people.min / max / step", f"{_num(cfg.n_avg_min)} - {_num(cfg.n_avg_max)}, step {cfg.n_avg_step}",
          "Slider range"),
+        ("purchase_prob.default", _probabilities(cfg.purchase_prob_default),
+         "Percent chance that a person leaving a store buys one item of the category; slider start values"),
+        ("purchase_prob.min / max / step", f"{cfg.prob_min}% - {cfg.prob_max}%, step {cfg.prob_step}",
+         "Probability slider range"),
         ("simulation.real_seconds_per_sim_day", f"{cfg.real_seconds_per_sim_day} s = 24 h",
          f"Day length: 1 simulated hour = {_num(cfg.real_seconds_per_sim_hour)} s"),
         ("simulation.max_run_sim_hours", f"{cfg.max_run_sim_hours} h = {_num(cfg.max_run_real_seconds)} s",

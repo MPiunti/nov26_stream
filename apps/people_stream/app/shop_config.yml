@@ -15,6 +15,33 @@ n_avg_people:               # average visitors per store per simulated day, by m
   max: 6000
   step: 100
 
+purchase_prob:              # percent chance that a person leaving a store buys one item of the category
+  default:                  # horizontal slider start values and "Reset to defaults"; see doc/sales.md
+    EUROPE:
+      SHOES: 5
+      BAGS: 2
+      READY_TO_WEAR: 6
+      ACCESSORIES: 3
+      TRAVEL: 2
+      SUNGLASSES: 2
+    AMERICAS:
+      SHOES: 5
+      BAGS: 2
+      READY_TO_WEAR: 6
+      ACCESSORIES: 3
+      TRAVEL: 2
+      SUNGLASSES: 2
+    ASIA:
+      SHOES: 5
+      BAGS: 2
+      READY_TO_WEAR: 6
+      ACCESSORIES: 3
+      TRAVEL: 2
+      SUNGLASSES: 2
+  min: 0                    # slider range, percent
+  max: 100
+  step: 1
+
 simulation:
   real_seconds_per_sim_day: 240   # 24 simulated hours take 240 real seconds (1 hour = 10 s)
   max_run_sim_hours: 48           # a run ends by itself after 48 simulated hours

@@ -8,7 +8,7 @@ The stores, opening hours, payload and `N_AVG_PEOPLE_*` parameters are defined i
 
 | | |
 |---|---|
-| **What it does** | Simulates the people flow of all 200 stores and inserts the events into `workspace.test02_streaming.simulated_event_source` |
+| **What it does** | Simulates the people flow of all 200 stores and inserts the events into `workspace.test02_streaming.simulated_event_source`. Its sales simulator turns people leaving into sales transactions in `simulated_sales_source`; see [`sales.md`](sales.md) |
 | **What it doesn't do** | Run the pipeline. The pipeline is triggered: run it (or schedule it) to move new events to bronze, silver and quarantine |
 | **Bundle** | `apps/people_stream/`, bundle `retail_people_stream_bundle`. Separate from the pipeline bundle at the repo root: deployed, started and destroyed on its own |
 | **App** | `people-stream-<user>` (e.g. `people-stream-michele-piunti`), under **Compute → Apps** |
@@ -33,6 +33,8 @@ Every store and simulation parameter is in `apps/people_stream/app/shop_config.y
 | `stores.opening_hour`, `stores.closing_hour` | 10, 20 | Opening hours, each store's local time |
 | `n_avg_people.default.EUROPE` / `.AMERICAS` / `.ASIA` | 3000 each | `N_AVG_PEOPLE_EUROPE`, `_AMERICA`, `_ASIA`: average visitors per store per simulated day; slider start values and **Reset to defaults** |
 | `n_avg_people.min`, `.max`, `.step` | 2000, 6000, 100 | Slider range |
+| `purchase_prob.default.<REGION>.<CATEGORY>` | SHOES 5, BAGS 2, READY_TO_WEAR 6, ACCESSORIES 3, TRAVEL 2, SUNGLASSES 2 (every region) | PURCHASE_PROB, percent: chance that a person leaving buys one item of the category; horizontal slider start values. See `sales.md` §3 |
+| `purchase_prob.min`, `.max`, `.step` | 0, 100, 1 | Probability slider range |
 | `simulation.real_seconds_per_sim_day` | 240 | Day length: 24 simulated hours in 240 real seconds, so 1 hour = 10 s |
 | `simulation.max_run_sim_hours` | 48 | Longest run (= 480 real seconds with a 240 s day) |
 | `simulation.tick_seconds` | 5 | Real seconds between batches (= 30 simulated minutes with a 240 s day) |
@@ -50,10 +52,13 @@ The screen has a header, always visible, and two tabs: **Simulator** (controls) 
 | **START** | Starts a new run from scratch: reads the stores and sets the simulated clock to the current time. The run lasts at most 48 simulated hours (480 s). Disabled while running |
 | **STOP** | Ends the run: the generator quits after the batch it is writing, if any. Disabled while stopped |
 | **Three vertical sliders (equalizer)** | `N_AVG_PEOPLE_EUROPE`, `N_AVG_PEOPLE_AMERICA`, `N_AVG_PEOPLE_ASIA`: average visitors per store per simulated day. Range 2000–6000, step 100, default 3000 (from `shop_config.yml`). A change applies from the next batch, also while running |
-| **Reset to defaults** | Puts the three sliders back to `n_avg_people.default` |
+| **PURCHASE_PROB sliders** | Under each region's vertical slider, six horizontal sliders, one per merchandise category, 0–100%. See `sales.md` §3 |
+| **Reset to defaults** | Puts all sliders back to `n_avg_people.default` and `purchase_prob.default` |
 | **Parameters** | The values read from `shop_config.yml`, with what each means |
 | **Headline time** | Next to the title, while a run is `RUNNING`: the simulated UTC time rounded down to the hour, e.g. `2026-11-14 07:00 UTC`. Hidden otherwise |
 | **Tabs** | **Simulator**: sliders, parameters and stream status; no charts. **Counters**: the in/out table, people per calendar date, and the cumulative people-out and people-in charts. START, STOP and the headline sit above the tabs |
+| **Browser tab title** | Always `People stream simulator`; it doesn't change while the screen refreshes |
+| **Sales transactions by region and category** (Counters tab) | Per region: transactions per category, total, amount in EUR, transactions per person out. See `sales.md` §8 |
 | **In, out and still inside** (Counters tab) | Per region: people in (sum of `ENTRY`), people out (sum of `EXIT`) and their difference, the people still inside open stores |
 | **People per calendar date** (Counters tab) | Bar chart: for each calendar date, one bar per region (grouped side by side) with the sum of `people_count` on that date. The date is the store's local date (from `event_timestamp`), the same day the in/out balance uses. A switch picks **People out (EXIT)** (default) or **People in (ENTRY)**. Each bar is that date's total, not a running total. The first and last dates of a run are partial, because the run starts and ends mid-day |
 | **Cumulative people-in chart** (Counters tab) | One line per region, the running sum of `people_count` of the region's `ENTRY` events since START (y), against simulated UTC time (x). The x axis always spans the run's 48 simulated hours from START, so the lines grow left to right; one point per batch (at most 97). Colors are fixed per region (Europe blue, Americas orange, Asia aqua), with a legend, a label at each line's end, and a shared hover tooltip. The chart keeps the last run until the next START |
@@ -134,10 +139,10 @@ A run can end while some stores are open: their last `ENTRY` events have no matc
 
 | Step | How |
 |---|---|
-| Before the first deploy | In the pipeline bundle, run `src/sql/01_…`, `02_…` (stores with `macro_region`) and `04_…` (source table). The app's permissions are granted on these tables, so they must exist |
+| Before the first deploy | In the pipeline bundle, run `src/sql/01_…`, `02_…` (stores with `macro_region`), `04_…` (source table) and `08_…` to `12_…` (clients, products, sales source). The app's permissions are granted on these tables, so they must exist |
 | Check | `databricks bundle validate --strict -t dev --profile MPiunti`, from `apps/people_stream/` |
 | Deploy | From `apps/people_stream/`: `databricks bundle deploy -t dev --profile MPiunti`, then `databricks bundle run people_stream -t dev --profile MPiunti` to start the app; or, in the workspace Git folder, open `apps/people_stream/` and use **Deployments** |
-| Granted to the app | `CAN_USE` on the warehouse; `SELECT` on `dim_store`; `SELECT` and `MODIFY` on `simulated_event_source` |
+| Granted to the app | `CAN_USE` on the warehouse; `SELECT` on `dim_store`, `dim_client` and `dim_product`; `SELECT` and `MODIFY` on `simulated_event_source` and `simulated_sales_source` |
 | Stop paying for it | Stop the app under **Compute → Apps**; STOP alone only stops the simulation |
 
 The pipeline bundle doesn't upload `apps/` (`sync.exclude` in the root `databricks.yml`), and the app bundle has its own state, so deploying one never changes the other.
