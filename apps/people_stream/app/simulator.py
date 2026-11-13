@@ -229,6 +229,8 @@ class Simulation:
                        "run_id": None, "remaining_seconds": None,
                        "rows_written": 0, "batches": 0, "entries": {r: 0 for r in REGIONS},
                        "exits": {r: 0 for r in REGIONS},
+                       # People per store-local calendar date: {date: {region: {"entries": n, "exits": n}}}.
+                       "daily": {},
                        "open_stores": {r: 0 for r in REGIONS}, "stores": {r: 0 for r in REGIONS},
                        "last_batch_rows": 0, "error": None,
                        # Cumulative people_count of ENTRY and of EXIT events per region, one point per batch.
@@ -294,7 +296,11 @@ class Simulation:
                     for row in rows:
                         event = json.loads(row["raw_event"])
                         kind = "entries" if event["event_type"] == "ENTRY" else "exits"
-                        st[kind][REGIONS[row["source_partition"]]] += event["people_count"]
+                        region = REGIONS[row["source_partition"]]
+                        st[kind][region] += event["people_count"]
+                        day = st["daily"].setdefault(event["event_timestamp"][:10],
+                                                     {r: {"entries": 0, "exits": 0} for r in REGIONS})
+                        day[region][kind] += event["people_count"]
                     st["error"] = None
                     st["remaining_seconds"] = max(0.0, MAX_RUN_REAL_SECONDS - elapsed)
                     st["history"].append({"sim_utc": sim_to, "entries": dict(st["entries"]),

@@ -1,4 +1,4 @@
-"""Cumulative ENTRY and EXIT people counts per region over the run's simulated time.
+"""Counters charts: cumulative ENTRY and EXIT lines over simulated time, and people per calendar date.
 
 See doc/people_stream.md §3. Both charts share one form: x = simulated UTC time over the run's
 max_run_sim_hours, y = running sum of people_count, one line per region with a fixed color.
@@ -66,4 +66,38 @@ def cumulative(snapshot, max_hours, kind):
     fig.update_yaxes(title={"text": y_title, "font": {"color": MUTED}},
                      rangemode="tozero", gridcolor=GRID, zeroline=False, tickformat=",",
                      tickfont={"color": MUTED})
+    return fig
+
+
+DAILY_TITLE = {"entries": "People in (ENTRY) per date", "exits": "People out (EXIT) per date"}
+
+
+def daily_bars(snapshot, kind):
+    """Sum of people_count per store-local calendar date, one bar per region side by side."""
+    daily = snapshot.get("daily") or {}
+    fig = go.Figure()
+    if daily:
+        dates = sorted(daily)
+        for region, color in REGION_COLOR.items():
+            fig.add_trace(go.Bar(
+                x=dates, y=[daily[d][region][kind] for d in dates], name=REGION_LABEL[region],
+                marker={"color": color, "line": {"color": "white", "width": 2}},
+                hovertemplate=f"{REGION_LABEL[region]}, %{{x}}: %{{y:,}}<extra></extra>",
+            ))
+    else:
+        fig.add_annotation(text="Press START to stream visitors", x=0.5, y=0.5, xref="paper", yref="paper",
+                           showarrow=False, font={"color": MUTED})
+        fig.update_xaxes(visible=False)
+        fig.update_yaxes(visible=False)
+    fig.update_layout(
+        height=320, margin={"l": 60, "r": 30, "t": 30, "b": 50}, barmode="group", bargap=0.25,
+        barcornerradius=4, plot_bgcolor="white", paper_bgcolor="white", font={"color": TEXT, "size": 12},
+        hovermode="closest", showlegend=True,
+        legend={"orientation": "h", "x": 0, "y": 1.12, "font": {"color": TEXT}},
+        uirevision=snapshot.get("run_id") or "none",
+    )
+    fig.update_xaxes(title={"text": "Calendar date (store local time)", "font": {"color": MUTED}},
+                     type="category", linecolor=GRID, tickfont={"color": MUTED})
+    fig.update_yaxes(title={"text": DAILY_TITLE[kind], "font": {"color": MUTED}}, rangemode="tozero",
+                     gridcolor=GRID, zeroline=False, tickformat=",", tickfont={"color": MUTED})
     return fig

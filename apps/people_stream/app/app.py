@@ -71,7 +71,7 @@ def chart_card(title, graph_id, figure):
 
 
 def simulator_tab(n_avg):
-    snapshot = simulation.snapshot()
+    """Controls only: sliders, parameters and stream status. The charts are on the Counters tab."""
     return [
         dbc.Card([
             dbc.CardHeader("Average visitors per store per day, by region"),
@@ -80,20 +80,32 @@ def simulator_tab(n_avg):
                 dbc.Button("Reset to defaults", id="reset", color="link", size="sm", className="mt-2"),
             ]),
         ], className="mb-3 shadow-sm"),
-        chart_card("Cumulative people in per region (sum of ENTRY people_count), simulated UTC time",
-                   "entries-chart", charts.cumulative_entries(snapshot, sim.MAX_RUN_SIM_HOURS)),
         parameters_card(),
         dbc.Card([dbc.CardHeader("Stream"), dbc.CardBody(id="stream-stats")], className="mb-3 shadow-sm"),
     ]
 
 
-def exits_tab():
+def counters_tab():
+    """The dashboard: in/out counters, people per calendar date, and the cumulative lines."""
     snapshot = simulation.snapshot()
     return [
-        chart_card("Cumulative people out per region (sum of EXIT people_count), simulated UTC time",
-                   "exits-chart", charts.cumulative_exits(snapshot, sim.MAX_RUN_SIM_HOURS)),
         dbc.Card([dbc.CardHeader("In, out and still inside, by region"), dbc.CardBody(id="exit-stats")],
                  className="mb-3 shadow-sm"),
+        dbc.Card([
+            dbc.CardHeader(dbc.Row([
+                dbc.Col("People per calendar date (store local time), by region"),
+                dbc.Col(dbc.RadioItems(id="daily-kind", value="exits", inline=True, options=[
+                    {"label": "People out (EXIT)", "value": "exits"},
+                    {"label": "People in (ENTRY)", "value": "entries"},
+                ]), width="auto"),
+            ], className="g-2 align-items-center")),
+            dbc.CardBody(dcc.Graph(id="daily-chart", config={"displayModeBar": False},
+                                   figure=charts.daily_bars(snapshot, "exits"))),
+        ], className="mb-3 shadow-sm"),
+        chart_card("Cumulative people out per region (sum of EXIT people_count), simulated UTC time",
+                   "exits-chart", charts.cumulative_exits(snapshot, sim.MAX_RUN_SIM_HOURS)),
+        chart_card("Cumulative people in per region (sum of ENTRY people_count), simulated UTC time",
+                   "entries-chart", charts.cumulative_entries(snapshot, sim.MAX_RUN_SIM_HOURS)),
         html.P(f"Everyone still inside a store leaves in a final EXIT at its {CFG.closing_hour:02d}:00 closing, "
                "so each store's day ends with as many people out as in. Stores still open when the run "
                "ends keep their people inside.", className="small text-muted"),
@@ -123,7 +135,7 @@ def serve_layout():
         ], className="g-3")), className="mb-3 shadow-sm"),
         dbc.Tabs(id="tabs", active_tab="tab-simulator", className="mb-3", children=[
             dbc.Tab(label="Simulator", tab_id="tab-simulator", children=simulator_tab(n_avg)),
-            dbc.Tab(label="Exits", tab_id="tab-exits", children=exits_tab()),
+            dbc.Tab(label="Counters", tab_id="tab-counters", children=counters_tab()),
         ]),
         dcc.Interval(id="tick", interval=1000),
         dcc.Store(id="sink-buttons"),
@@ -174,6 +186,12 @@ def refresh_chart(_, version):
         return no_update, no_update, no_update, no_update
     return (charts.cumulative_entries(s, sim.MAX_RUN_SIM_HOURS), charts.cumulative_exits(s, sim.MAX_RUN_SIM_HOURS),
             exit_stats(s), current)
+
+
+@app.callback(Output("daily-chart", "figure"), Input("daily-kind", "value"), Input("chart-version", "data"))
+def refresh_daily(kind, _version):
+    """Redraw on a new batch (chart-version changes) or when people in / out is switched."""
+    return charts.daily_bars(simulation.snapshot(), kind or "exits")
 
 
 def exit_stats(s):

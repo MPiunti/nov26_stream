@@ -43,7 +43,7 @@ The rest of this page quotes the shipped values. `dataset.md` §4 and §5 descri
 
 ## 3. Screen
 
-The screen has a header, always visible, and two tabs: **Simulator** and **Exits**.
+The screen has a header, always visible, and two tabs: **Simulator** (controls) and **Counters** (the dashboard).
 
 | Control | Behaviour |
 |---|---|
@@ -53,10 +53,11 @@ The screen has a header, always visible, and two tabs: **Simulator** and **Exits
 | **Reset to defaults** | Puts the three sliders back to `n_avg_people.default` |
 | **Parameters** | The values read from `shop_config.yml`, with what each means |
 | **Headline time** | Next to the title, while a run is `RUNNING`: the simulated UTC time rounded down to the hour, e.g. `2026-11-14 07:00 UTC`. Hidden otherwise |
-| **Tabs** | **Simulator**: sliders, the cumulative people-in chart, parameters and stream status. **Exits**: the cumulative people-out chart and a table of people in, out and still inside per region. START, STOP and the headline sit above the tabs |
-| **Cumulative visitors chart** (Simulator tab) | Under the sliders: one line per region, the running sum of `people_count` of the region's `ENTRY` events since START (y), against simulated UTC time (x). The x axis always spans the run's 48 simulated hours from START, so the lines grow left to right; one point per batch (at most 97). Colors are fixed per region (Europe blue, Americas orange, Asia aqua), with a legend, a label at each line's end, and a shared hover tooltip. The chart keeps the last run until the next START |
-| **Cumulative exits chart** (Exits tab) | The same chart for `EXIT` events: the running sum of `people_count` of the region's `EXIT` events since START (y) against simulated UTC time (x), over the run's 48 hours, same colors, legend, end labels and hover. Exits follow entries during the day and catch up at each store's 20:00 closing, so the lines climb in steps when a region closes |
-| **In, out and still inside** (Exits tab) | Per region: people in (sum of `ENTRY`), people out (sum of `EXIT`) and their difference, the people still inside open stores |
+| **Tabs** | **Simulator**: sliders, parameters and stream status; no charts. **Counters**: the in/out table, people per calendar date, and the cumulative people-out and people-in charts. START, STOP and the headline sit above the tabs |
+| **In, out and still inside** (Counters tab) | Per region: people in (sum of `ENTRY`), people out (sum of `EXIT`) and their difference, the people still inside open stores |
+| **People per calendar date** (Counters tab) | Bar chart: for each calendar date, one bar per region (grouped side by side) with the sum of `people_count` on that date. The date is the store's local date (from `event_timestamp`), the same day the in/out balance uses. A switch picks **People out (EXIT)** (default) or **People in (ENTRY)**. Each bar is that date's total, not a running total. The first and last dates of a run are partial, because the run starts and ends mid-day |
+| **Cumulative people-in chart** (Counters tab) | One line per region, the running sum of `people_count` of the region's `ENTRY` events since START (y), against simulated UTC time (x). The x axis always spans the run's 48 simulated hours from START, so the lines grow left to right; one point per batch (at most 97). Colors are fixed per region (Europe blue, Americas orange, Asia aqua), with a legend, a label at each line's end, and a shared hover tooltip. The chart keeps the last run until the next START |
+| **Cumulative people-out chart** (Counters tab) | The same chart for `EXIT` events: the running sum of `people_count` of the region's `EXIT` events since START (y) against simulated UTC time (x), over the run's 48 hours, same colors, legend, end labels and hover. Exits follow entries during the day and catch up at each store's 20:00 closing, so the lines climb in steps when a region closes |
 | **Status** | State (`STOPPED` by STOP, `FINISHED` after 48 simulated hours, `STARTING`, `RUNNING`, `FAILED` with the error), simulated UTC time, start and end time, seconds left, rows written, batches, run id; per region: stores open now and visitors so far |
 
 There is one simulation per app, shared by everyone who opens it: a second viewer sees the same run and the same slider values.

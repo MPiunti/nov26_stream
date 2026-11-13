@@ -177,11 +177,42 @@ class RunLengthTests(unittest.TestCase):
         self.assertIn('"exits-chart", charts.cumulative_exits(', app)
         self.assertIn('y = [p[kind][region] for p in history]', chart)
 
-    def test_exits_have_their_own_tab(self):
+    def test_charts_only_on_the_counters_tab(self):
         app = read_text(*APP, "app", "app.py")
-        self.assertIn('dbc.Tab(label="Simulator", tab_id="tab-simulator"', app)
-        self.assertIn('dbc.Tab(label="Exits", tab_id="tab-exits", children=exits_tab())', app)
-        self.assertIn('Output("exits-chart", "figure")', app)
+        self.assertIn('dbc.Tab(label="Simulator", tab_id="tab-simulator", children=simulator_tab(n_avg))', app)
+        self.assertIn('dbc.Tab(label="Counters", tab_id="tab-counters", children=counters_tab())', app)
+        simulator_tab = app.split("def simulator_tab(", 1)[1].split("\ndef ", 1)[0]
+        counters_tab = app.split("def counters_tab(", 1)[1].split("\ndef ", 1)[0]
+        self.assertNotIn("dcc.Graph", simulator_tab)
+        self.assertNotIn("chart_card", simulator_tab)
+        for graph in ('id="daily-chart"', '"exits-chart"', '"entries-chart"', 'id="exit-stats"'):
+            self.assertIn(graph, counters_tab)
+
+    def test_daily_bar_chart_groups_regions_per_date(self):
+        chart = read_text(*APP, "app", "charts.py")
+        self.assertIn('barmode="group"', chart)
+        self.assertIn('y=[daily[d][region][kind] for d in dates]', chart)
+        self.assertIn('Input("daily-kind", "value")', read_text(*APP, "app", "app.py"))
+
+    def test_daily_totals_per_local_date(self):
+        written = []
+        s = self._simulation(written)
+        s.start()
+        s._thread.join(timeout=10)
+        snap = s.snapshot()
+        daily = snap["daily"]
+        expected = defaultdict(int)
+        for row in written:
+            e = json.loads(row["raw_event"])
+            kind = "entries" if e["event_type"] == "ENTRY" else "exits"
+            expected[(e["event_timestamp"][:10], sim.REGIONS[row["source_partition"]], kind)] += e["people_count"]
+        got = {(d, r, k): daily[d][r][k] for d in daily for r in sim.REGIONS for k in ("entries", "exits")}
+        self.assertEqual({key: v for key, v in got.items() if v}, dict(expected))
+        for kind in ("entries", "exits"):
+            for region in sim.REGIONS:
+                self.assertEqual(sum(daily[d][region][kind] for d in daily), snap[kind][region])
+        # 48 hours from 21:00 UTC touch 3 store-local dates in every region
+        self.assertEqual(sorted(daily), ["2026-11-13", "2026-11-14", "2026-11-15", "2026-11-16"][:len(daily)])
 
     def test_stop_quits_the_generator(self):
         s = sim.Simulation(lambda: _stores()[:3], lambda: {}, lambda rows: None, tick_seconds=0.01,
