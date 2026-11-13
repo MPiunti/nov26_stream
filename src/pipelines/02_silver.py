@@ -269,7 +269,9 @@ def validated_events():
     schema=SILVER_SCHEMA,
     table_properties={
         "quality": "silver",
-        "domain": "retail"
+        "domain": "retail",
+        # Required for the TIMESTAMP_NTZ column event_timestamp
+        "delta.feature.timestampNtz": "supported"
     }
 )
 def silver_people_counter_events():
@@ -307,7 +309,9 @@ def silver_people_counter_events():
     schema=QUARANTINE_SCHEMA,
     table_properties={
         "quality": "quarantine",
-        "domain": "retail"
+        "domain": "retail",
+        # Required for the TIMESTAMP_NTZ column event_timestamp
+        "delta.feature.timestampNtz": "supported"
     }
 )
 def quarantine_people_counter_events():
