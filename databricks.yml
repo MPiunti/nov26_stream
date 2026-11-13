@@ -1,17 +1,36 @@
+# Declarative Automation Bundle configuration, more info here: https://docs.databricks.com/en/dev-tools/bundles/settings.html
 bundle:
-  name: retail-people-counter
-
-variables:
-  catalog:
-    default: workspace
-
-  schema:
-    default: test02_streaming
+  name: "retail_people_counter_bundle"
 
 include:
   - resources/*.yml
+  - resources/*/*.yml
+
+# Variables used by the resources in resources/*.yml
+variables:
+  catalog:
+    description: Unity Catalog catalog for the pipeline tables
+    default: workspace
+  schema:
+    description: Schema for the pipeline tables
+    default: test02_streaming
 
 targets:
+  # The 'dev' target, for development purposes. This target is the default.
   dev:
     mode: development
     default: true
+    workspace:
+      host: https://dbc-06fb0002-68c5.cloud.databricks.com
+
+  # The 'prod' target, used for production deployment.
+  prod:
+    mode: production
+    workspace:
+      host: https://dbc-06fb0002-68c5.cloud.databricks.com
+      # We always use /Users/michele.piunti@gmail.com for all resources to make sure we only have a single copy.
+      root_path: /Users/michele.piunti@gmail.com/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      # This runs as michele.piunti@gmail.com in production. We could also use a service principal here,
+      # see https://docs.databricks.com/dev-tools/bundles/permissions.html.
+      user_name: michele.piunti@gmail.com
