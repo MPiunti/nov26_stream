@@ -5,8 +5,9 @@ See doc/people_stream.md. One simulation runs per app process and is shared by e
 import os
 
 import dash_bootstrap_components as dbc
-from dash import Dash, Input, Output, ctx, dcc, html
+from dash import Dash, Input, Output, State, ctx, dcc, html, no_update
 
+import charts
 import simulator as sim
 import warehouse
 
@@ -46,7 +47,10 @@ def serve_layout():
     # Built per page load, so the sliders show the running simulation's values.
     n_avg = simulation.snapshot()["n_avg"]
     return dbc.Container([
-        html.H3("People stream simulator", className="mt-3"),
+        html.Div([
+            html.H3("People stream simulator", className="mb-0 me-3"),
+            html.H4(id="headline-time", className="mb-0 text-primary"),
+        ], className="d-flex align-items-baseline flex-wrap mt-3 mb-2"),
         html.P("Streams simulated people-counter events into the pipeline's source table. "
                "24 simulated hours take 240 seconds; stores are open 10:00-20:00 local time. "
                "Each run lasts at most 48 simulated hours (480 seconds); START always begins a new run.",
@@ -65,10 +69,16 @@ def serve_layout():
                 dbc.Button("Reset to 3000", id="reset", color="link", size="sm", className="mt-2"),
             ]),
         ], className="mb-3 shadow-sm"),
+        dbc.Card([
+            dbc.CardHeader("Cumulative visitors per region (sum of ENTRY people_count), simulated UTC time"),
+            dbc.CardBody(dcc.Graph(id="entries-chart", config={"displayModeBar": False},
+                                   figure=charts.cumulative_entries(simulation.snapshot()))),
+        ], className="mb-3 shadow-sm"),
         dbc.Card([dbc.CardHeader("Stream"), dbc.CardBody(id="stream-stats")], className="mb-3 shadow-sm"),
         dcc.Interval(id="tick", interval=1000),
         dcc.Store(id="sink-buttons"),
         dcc.Store(id="sink-sliders"),
+        dcc.Store(id="chart-version"),
     ], fluid=False)
 
 
@@ -104,6 +114,16 @@ def set_n_avg(*values):
     return simulation.snapshot()["n_avg"]
 
 
+@app.callback(Output("entries-chart", "figure"), Output("chart-version", "data"),
+              Input("tick", "n_intervals"), State("chart-version", "data"))
+def refresh_chart(_, version):
+    s = simulation.snapshot()
+    current = f"{s['run_id']}:{len(s['history'])}"
+    if current == version:  # redraw only when a new batch arrived
+        return no_update, no_update
+    return charts.cumulative_entries(s), current
+
+
 def _fmt_time(iso):
     return iso[:19].replace("T", " ") + " UTC" if iso else "-"
 
@@ -114,6 +134,7 @@ def _fmt_time(iso):
               Output({"type": "region-stats", "region": sim.REGIONS[2]}, "children"),
               Output("start", "disabled"),
               Output("stop", "disabled"),
+              Output("headline-time", "children"),
               Input("tick", "n_intervals"))
 def refresh(_):
     s = simulation.snapshot()
@@ -134,7 +155,7 @@ def refresh(_):
     regions = [html.Div([html.Div(f"{s['open_stores'][r]} / {s['stores'][r]} stores open"),
                          html.Div(f"{s['entries'][r]:,} visitors so far")]) for r in sim.REGIONS]
     active = s["state"] in ("RUNNING", "STARTING")
-    return state, stats, *regions, active, not active
+    return state, stats, *regions, active, not active, sim.headline_time(s)
 
 
 if __name__ == "__main__":

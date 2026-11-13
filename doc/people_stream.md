@@ -32,6 +32,8 @@ The stores, opening hours, payload and `N_AVG_PEOPLE_*` parameters are defined i
 | **STOP** | Ends the run: the generator quits after the batch it is writing, if any. Disabled while stopped |
 | **Three vertical sliders (equalizer)** | `N_AVG_PEOPLE_EUROPE`, `N_AVG_PEOPLE_AMERICA`, `N_AVG_PEOPLE_ASIA`: average visitors per store per simulated day. Range 2000–6000, step 100, default 3000. A change applies from the next batch, also while running |
 | **Reset to 3000** | Puts all three sliders back to the default |
+| **Headline time** | Next to the title, while a run is `RUNNING`: the simulated UTC time rounded down to the hour, e.g. `2026-11-14 07:00 UTC`. Hidden otherwise |
+| **Cumulative visitors chart** | Under the sliders: one line per region, the running sum of `people_count` of the region's `ENTRY` events since START (y), against simulated UTC time (x). The x axis always spans the run's 48 simulated hours from START, so the lines grow left to right; one point per batch (at most 97). Colors are fixed per region (Europe blue, Americas orange, Asia aqua), with a legend, a label at each line's end, and a shared hover tooltip. The chart keeps the last run until the next START |
 | **Status** | State (`STOPPED` by STOP, `FINISHED` after 48 simulated hours, `STARTING`, `RUNNING`, `FAILED` with the error), simulated UTC time, start and end time, seconds left, rows written, batches, run id; per region: stores open now and visitors so far |
 
 There is one simulation per app, shared by everyone who opens it: a second viewer sees the same run and the same slider values.

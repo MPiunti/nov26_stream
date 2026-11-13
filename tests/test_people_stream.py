@@ -138,6 +138,37 @@ class RunLengthTests(unittest.TestCase):
         self.assertEqual(first["rows_written"] + second["rows_written"], len(written))
         self.assertLess(second["rows_written"], len(written))  # counters restart with each run
 
+    def test_history_feeds_the_cumulative_chart(self):
+        written = []
+        s = self._simulation(written)
+        s.start()
+        s._thread.join(timeout=10)
+        snap = s.snapshot()
+        history = snap["history"]
+        self.assertEqual(history[0], {"sim_utc": str(self.START), "EUROPE": 0, "AMERICAS": 0, "ASIA": 0})
+        self.assertTrue(history[-1]["sim_utc"].startswith(str(self.START + timedelta(hours=48))[:19]))
+        self.assertLessEqual(len(history), 97)
+        for region in sim.REGIONS:
+            values = [p[region] for p in history]
+            self.assertEqual(values, sorted(values), f"{region} isn't cumulative")
+            self.assertEqual(values[-1], snap["entries"][region])
+        entries = sum(json.loads(r["raw_event"])["people_count"] for r in written
+                      if json.loads(r["raw_event"])["event_type"] == "ENTRY")
+        self.assertEqual(sum(history[-1][r] for r in sim.REGIONS), entries)
+
+    def test_headline_shows_the_simulated_hour_only_while_running(self):
+        self.assertEqual(sim.headline_time({"state": "RUNNING", "sim_utc": "2026-11-14 07:42:10+00:00"}),
+                         "2026-11-14 07:00 UTC")
+        self.assertEqual(sim.headline_time({"state": "FINISHED", "sim_utc": "2026-11-15 21:00:00+00:00"}), "")
+        self.assertEqual(sim.headline_time({"state": "STOPPED", "sim_utc": None}), "")
+
+    def test_chart_spans_48_hours_with_fixed_region_colors(self):
+        chart = read_text(*APP, "app", "charts.py")
+        self.assertIn('REGION_COLOR = {"EUROPE": "#2a78d6", "AMERICAS": "#eb6834", "ASIA": "#1baf7a"}', chart)
+        self.assertIn("range=[start, start + timedelta(hours=max_hours)]", chart)
+        self.assertIn('"width": 2', chart)
+        self.assertIn('id="entries-chart"', read_text(*APP, "app", "app.py"))
+
     def test_stop_quits_the_generator(self):
         s = sim.Simulation(lambda: _stores()[:3], lambda: {}, lambda rows: None, tick_seconds=0.01,
                            now=lambda: self.START)
@@ -320,7 +351,8 @@ class PeopleStreamDocTests(unittest.TestCase):
 
     def test_readme_lists_app_files(self):
         readme = read_text("readme.md")
-        for root, _, files in os.walk(path(*APP)):
+        for root, dirs, files in os.walk(path(*APP)):
+            dirs[:] = [d for d in dirs if d != "__pycache__"]  # local bytecode, gitignored
             for f in files:
                 self.assertIn(f, readme, f"{os.path.join(root, f)} isn't in readme.md")
 

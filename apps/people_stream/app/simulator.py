@@ -57,6 +57,13 @@ class StoreStream:
         self.tz = ZoneInfo(self.store.timezone_id)
 
 
+def headline_time(snapshot):
+    """Headline text: simulated UTC time rounded down to the hour while RUNNING, else empty."""
+    if snapshot.get("state") != "RUNNING" or not snapshot.get("sim_utc"):
+        return ""
+    return f"{str(snapshot['sim_utc'])[:13].replace('T', ' ')}:00 UTC"
+
+
 def clamp_n_avg(value):
     """Slider value -> valid N_AVG_PEOPLE: within [N_AVG_MIN, N_AVG_MAX], on the step grid."""
     value = int(round(float(value) / N_AVG_STEP)) * N_AVG_STEP
@@ -217,7 +224,9 @@ class Simulation:
                        "run_id": None, "remaining_seconds": None,
                        "rows_written": 0, "batches": 0, "entries": {r: 0 for r in REGIONS},
                        "open_stores": {r: 0 for r in REGIONS}, "stores": {r: 0 for r in REGIONS},
-                       "last_batch_rows": 0, "error": None}
+                       "last_batch_rows": 0, "error": None,
+                       # Cumulative visitors (ENTRY people_count) per region, one point per batch.
+                       "history": []}
 
     def set_n_avg(self, region, value):
         with self._lock:
@@ -253,6 +262,7 @@ class Simulation:
                                    run_id=generator.run_id, remaining_seconds=MAX_RUN_REAL_SECONDS)
                 for s in stores:
                     self.status["stores"][s.macro_region] += 1
+                self.status["history"].append({"sim_utc": start_utc, **{r: 0 for r in REGIONS}})
             sim_from = start_utc
             finished = False
             while not finished:
@@ -280,6 +290,7 @@ class Simulation:
                             st["entries"][REGIONS[row["source_partition"]]] += event["people_count"]
                     st["error"] = None
                     st["remaining_seconds"] = max(0.0, MAX_RUN_REAL_SECONDS - elapsed)
+                    st["history"].append({"sim_utc": sim_to, **st["entries"]})
                 sim_from = sim_to
             with self._lock:
                 self.status["state"] = "FINISHED" if finished else "STOPPED"
