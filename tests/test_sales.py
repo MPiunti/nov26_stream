@@ -251,7 +251,7 @@ class SalesWarehouseTests(unittest.TestCase):
         wh, statements = warehouse.Warehouse(), []
         wh._execute = lambda sql, fetch=False: statements.append(sql)
         rows = [{"raw_event": "{}", "source_topic": sales.SALES_TOPIC, "source_partition": 0, "source_offset": i,
-                 "source_timestamp": datetime(2026, 1, 1, tzinfo=timezone.utc)} for i in range(2500)]
+                 "source_timestamp": datetime(2026, 1, 1, tzinfo=timezone.utc)} for i in range(25000)]
         wh.write_sales(rows)
         self.assertEqual(len(statements), 3)
         for sql in statements:
@@ -290,12 +290,12 @@ class SalesAppAndDocTests(unittest.TestCase):
 
     def test_sales_doc_matches_the_code(self):
         doc = read_text("doc", "sales.md")
-        for text in ("`retail-sales-app`", "tx-<run id>-<partition>-<offset, 10 digits>", "chunks of at most 1,000",
+        for text in ("`retail-sales-app`", "tx-<run id>-<partition>-<offset, 10 digits>", "chunks of at most 10,000",
                      "`store_id` → `dim_store`, `client_id` → `dim_client`, `product_id` → `dim_product`"):
             self.assertIn(text, doc)
         if sim is not None:
             self.assertEqual(sales.SALES_TOPIC, "retail-sales-app")
-            self.assertEqual(warehouse.CHUNK_ROWS, 1000)
+            self.assertEqual(warehouse.CHUNK_ROWS, 10000)
 
 
 if __name__ == "__main__":

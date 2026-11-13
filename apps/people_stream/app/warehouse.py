@@ -18,7 +18,7 @@ DEFAULT_TABLES = {
     "PRODUCT_TABLE": "workspace.test02_streaming.dim_product",
     "SALES_TABLE": "workspace.test02_streaming.simulated_sales_source",
 }
-CHUNK_ROWS = 1000  # rows per MERGE statement
+CHUNK_ROWS = 10000  # rows per MERGE statement (about 3 MB of SQL); each MERGE costs about 1 s however small
 
 
 def table(var):

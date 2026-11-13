@@ -51,7 +51,7 @@ The screen has a header, always visible, and two tabs: **Simulator** (controls) 
 | Control | Behaviour |
 |---|---|
 | **START** | Starts a new run from scratch: first **empties both source tables** (`simulated_event_source` and `simulated_sales_source`, see §7), then reads the stores and sets the simulated clock to the current time. The run lasts at most 48 simulated hours (480 s). Disabled while running |
-| **STOP** | Ends the run: the generator quits after the batch it is writing, if any. Disabled while stopped |
+| **STOP** | Ends the run: the generator stops at once (state `STOPPING`); batches already generated are still written (state `WRITING`), then the state becomes `STOPPED`. The screen never waits for the writes. Disabled while stopped |
 | **Three vertical sliders (equalizer)** | `N_AVG_PEOPLE_EUROPE`, `N_AVG_PEOPLE_AMERICA`, `N_AVG_PEOPLE_ASIA`: average visitors per store per simulated day. Range 2000–6000, step 100, default 3000 (from `shop_config.yml`). A change applies from the next batch, also while running |
 | **PURCHASE_PROB sliders** | Under each region's vertical slider, six horizontal sliders, one per merchandise category, 0–100%. See `sales.md` §3 |
 | **Reset to defaults** | Puts all sliders back to `n_avg_people.default` and `purchase_prob.default` |
@@ -64,7 +64,7 @@ The screen has a header, always visible, and two tabs: **Simulator** (controls) 
 | **People per calendar date** (Counters tab) | Bar chart: for each calendar date, one bar per region (grouped side by side) with the sum of `people_count` on that date. The date is the store's local date (from `event_timestamp`), the same day the in/out balance uses. A switch picks **People out (EXIT)** (default) or **People in (ENTRY)**. Each bar is that date's total, not a running total. The first and last dates of a run are partial, because the run starts and ends mid-day |
 | **Cumulative people-in chart** (Counters tab) | One line per region, the running sum of `people_count` of the region's `ENTRY` events since START (y), against simulated UTC time (x). The x axis always spans the run's 48 simulated hours from START, so the lines grow left to right; one point per batch (at most 97). Colors are fixed per region (Europe blue, Americas orange, Asia aqua), with a legend, a label at each line's end, and a shared hover tooltip. The chart keeps the last run until the next START |
 | **Cumulative people-out chart** (Counters tab) | The same chart for `EXIT` events: the running sum of `people_count` of the region's `EXIT` events since START (y) against simulated UTC time (x), over the run's 48 hours, same colors, legend, end labels and hover. Exits follow entries during the day and catch up at each store's 20:00 closing, so the lines climb in steps when a region closes |
-| **Status** | State (`STOPPED` by STOP, `FINISHED` after 48 simulated hours, `STARTING`, `RUNNING`, `FAILED` with the error), simulated UTC time, start and end time, seconds left, rows written, batches, run id; per region: stores open now and visitors so far |
+| **Status** | State (`STARTING`, `RUNNING`, `STOPPING` after STOP, `WRITING` while queued batches are still being written, `STOPPED` by STOP, `FINISHED` after 48 simulated hours, `FAILED` with the error), simulated UTC time, start and end time, seconds left, rows written, batches waiting to be written, batches generated, run id; per region: stores open now and visitors so far |
 
 There is one simulation per app, shared by everyone who opens it: a second viewer sees the same run and the same slider values.
 
@@ -79,7 +79,7 @@ There is one simulation per app, shared by everyone who opens it: a second viewe
 | Run length | **At most 48 simulated hours = 480 real seconds.** The last batch ends exactly at start + 48 h; then the generator quits and the state becomes `FINISHED`. The app itself keeps running, ready for the next START |
 | Restart | START always begins a new run from scratch, from the current real time, with a new run id and a new 480-second limit, on empty source tables; the previous run's simulated time, store occupancy and events are not kept |
 
-The batch window follows the real clock, not a counter: if a write takes longer than a tick, the next batch covers the longer window, and simulated time never drifts.
+**Fixed schedule:** batches are generated at START + 5 s, + 10 s, + 15 s, … (every `simulation.tick_seconds`), whatever the warehouse is doing, and the status and the Counters charts update with each batch: one new chart point per tick. Writing runs in the background (§7), so a slow write never delays the next tick or the charts. Each batch covers the simulated time since the previous one, so simulated time never drifts.
 
 ## 5. One stream per store
 
@@ -122,7 +122,9 @@ All simulated events pass the pipeline's validation rules, so they reach silver;
 - **Then run the pipeline with a full refresh of all tables:** bronze reads the source as a stream, and a stream fails after rows are deleted from its source. A full refresh (pipeline UI: **Full refresh all**, or `bundle run retail_people_counter_bronze --full-refresh-all`) rebuilds bronze, silver and quarantine from the emptied source, so they show the current run only. A normal pipeline run after a START fails. The app reminds you next to the run state.
 - **Statement:** one insert-only `MERGE` per batch into `simulated_event_source`, keyed on `source_topic`, `source_partition`, `source_offset`. A retried batch can't insert a row twice, and no row is ever updated or deleted, so bronze keeps streaming from the table.
 - **Connection:** through the SQL warehouse (Serverless Starter Warehouse), as the app's service principal; one connection reused across batches and reopened after an error.
-- **Failure:** if a write fails twice in a row, the run stops with state `FAILED` and the error on screen. Press START to begin a new run.
+- **Background writer:** each batch goes into a queue; a separate writer thread writes the batches in order, each batch's people events before its sales transactions. If the warehouse is slower than the ticks, batches wait in the queue (**Waiting to be written** on screen) instead of slowing the simulation; the writer catches up when the load drops. At STOP or after 48 hours the generator stops and the writer finishes the queue (`WRITING`) before the run ends.
+- **Chunks:** at most 10,000 rows per `MERGE` statement. Each `MERGE` costs about 1 second however small (measured: 1.1 s on average), so few large statements keep up with the ticks; a typical batch needs one statement per table.
+- **Failure:** if a write fails twice in a row, the run stops with state `FAILED` and the error on screen; batches not yet written are dropped. Press START to begin a new run.
 
 ## 8. Volumes
 

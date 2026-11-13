@@ -214,6 +214,32 @@ class RunLengthTests(unittest.TestCase):
         # 48 hours from 21:00 UTC touch 3 store-local dates in every region
         self.assertEqual(sorted(daily), ["2026-11-13", "2026-11-14", "2026-11-15", "2026-11-16"][:len(daily)])
 
+    def test_ticks_keep_their_schedule_when_writing_is_slow(self):
+        """Batches (and chart points) come every tick even if each write takes 4 ticks; nothing is lost."""
+        written = []
+
+        def slow_write(rows):
+            time.sleep(0.2)
+            written.extend(rows)
+
+        s = sim.Simulation(lambda: _stores(), lambda: {}, slow_write, tick_seconds=0.05,
+                           now=lambda: self.START)
+        s.start()
+        time.sleep(0.8)
+        running = s.snapshot()
+        self.assertGreaterEqual(running["batches"], 10, "about 16 ticks in 0.8 s, not 4")
+        self.assertEqual(len(running["history"]), running["batches"] + 1)
+        self.assertGreater(running["pending_batches"], 0, "slow writes queue up instead of slowing ticks")
+        s.stop(wait=False)
+        self.assertIn(s.snapshot()["state"], ("STOPPING", "WRITING"))
+        s._thread.join(timeout=30)
+        done = s.snapshot()
+        self.assertEqual(done["state"], "STOPPED")
+        self.assertEqual(done["pending_batches"], 0)
+        generated = sum(1 for p in done["history"][1:])  # every generated batch was written
+        self.assertEqual(done["rows_written"], len(written))
+        self.assertGreaterEqual(generated, running["batches"])
+
     def test_stop_quits_the_generator(self):
         s = sim.Simulation(lambda: _stores()[:3], lambda: {}, lambda rows: None, tick_seconds=0.01,
                            now=lambda: self.START)

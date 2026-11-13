@@ -29,8 +29,9 @@ CATEGORY_LABEL = {"SHOES": "Shoes", "BAGS": "Bags", "READY_TO_WEAR": "Ready-to-w
 CFG = sim.CONFIG  # from shop_config.yml, read once at start
 
 REGION_LABEL = {"EUROPE": "Europe", "AMERICAS": "Americas", "ASIA": "Asia"}
-STATE_COLOR = {"RUNNING": "success", "STARTING": "info", "STOPPED": "secondary", "FINISHED": "primary",
-               "FAILED": "danger"}
+STATE_COLOR = {"RUNNING": "success", "STARTING": "info", "STOPPING": "warning", "WRITING": "info",
+               "STOPPED": "secondary", "FINISHED": "primary", "FAILED": "danger"}
+ACTIVE_STATES = ("STARTING", "RUNNING", "STOPPING", "WRITING")
 
 # update_title=None: keep the browser tab title fixed; by default Dash shows "Updating..." during every
 # callback, which flickers with the 1-second refresh.
@@ -190,7 +191,7 @@ def start_stop(_start, _stop):
     if ctx.triggered_id == "start":
         simulation.start()
     else:
-        simulation.stop()
+        simulation.stop(wait=False)  # don't block the screen while queued batches are written
     return ctx.triggered_id
 
 
@@ -300,13 +301,15 @@ def refresh(_):
         dbc.Col([html.Div("Seconds left", className="small text-muted"),
                  html.Div("-" if s["remaining_seconds"] is None else f"{s['remaining_seconds']:.0f}")]),
         dbc.Col([html.Div("Rows written", className="small text-muted"), html.Div(f"{s['rows_written']:,}")]),
+        dbc.Col([html.Div("Waiting to be written", className="small text-muted"),
+                 html.Div(f"{s['pending_batches']:,} batches")]),
         dbc.Col([html.Div("Batches", className="small text-muted"),
                  html.Div(f"{s['batches']:,} (last {s['last_batch_rows']} rows)")]),
         dbc.Col([html.Div("Run id", className="small text-muted"), html.Div(s["run_id"] or "-")]),
     ])
     regions = [html.Div([html.Div(f"{s['open_stores'][r]} / {s['stores'][r]} stores open"),
                          html.Div(f"{s['entries'][r]:,} visitors so far")]) for r in sim.REGIONS]
-    active = s["state"] in ("RUNNING", "STARTING")
+    active = s["state"] in ACTIVE_STATES
     return (state, stats, *regions, active, not active, sim.headline_time(s),
             sim.browser_title(s, APP_TITLE))
 

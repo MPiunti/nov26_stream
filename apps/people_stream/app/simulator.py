@@ -15,6 +15,7 @@ with the shipped values:
 """
 import json
 import math
+import queue
 import random
 import threading
 import time
@@ -280,7 +281,8 @@ class Generator:
 
 
 class Simulation:
-    """START/STOP lifecycle: a background thread that ticks the generator and writes each batch.
+    """START/STOP lifecycle: a generation thread that ticks every tick_seconds on a fixed schedule (status and
+    charts update at once), and a writer thread that writes each batch to the warehouse in order.
 
     load_stores() -> [Store]; load_offsets() -> {partition: next offset}; write(rows) inserts them.
     Sales (optional, doc/sales.md): load_catalog() -> sales.Catalog; load_sales_offsets() -> {partition:
@@ -319,7 +321,9 @@ class Simulation:
                        # Sales so far: per region, transactions, amount (EUR) and transactions per category.
                        "sales": {r: {"transactions": 0, "amount": 0.0, "by_category": {c: 0 for c in CATEGORIES}}
                                  for r in REGIONS},
-                       "sales_rows_written": 0, "sources_cleared": False}
+                       "sales_rows_written": 0, "sources_cleared": False,
+                       # Batches generated but not yet written to the warehouse.
+                       "pending_batches": 0}
 
     def set_purchase_prob(self, region, category, value):
         with self._lock:
@@ -343,12 +347,18 @@ class Simulation:
         self._thread = threading.Thread(target=self._run, name="people-stream", daemon=True)
         self._thread.start()
 
-    def stop(self):
+    def stop(self, wait=True):
+        """End the run. The generator stops at once; batches already generated are still written."""
         self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=60)
+        with self._lock:
+            if self.status["state"] in ("RUNNING", "STARTING"):
+                self.status["state"] = "STOPPING"
+        if wait and self._thread is not None:
+            self._thread.join(timeout=120)
 
     def _run(self):
+        """Generation thread: one batch every tick_seconds on a fixed schedule; a writer thread writes them."""
+        batches, writer = None, None
         try:
             if self._clear_sources is not None:
                 self._clear_sources()  # every run starts from empty source tables
@@ -363,18 +373,22 @@ class Simulation:
             start_real, start_utc = self._clock(), self._now()
             end_utc = start_utc + timedelta(hours=MAX_RUN_SIM_HOURS)
             with self._lock:
-                self.status.update(state="RUNNING", start_utc=start_utc, sim_utc=start_utc, end_utc=end_utc,
+                if self.status["state"] == "STARTING":
+                    self.status["state"] = "RUNNING"
+                self.status.update(start_utc=start_utc, sim_utc=start_utc, end_utc=end_utc,
                                    run_id=generator.run_id, remaining_seconds=MAX_RUN_REAL_SECONDS)
                 for s in stores:
                     self.status["stores"][s.macro_region] += 1
                 self.status["history"].append({"sim_utc": start_utc, "entries": {r: 0 for r in REGIONS},
                                                "exits": {r: 0 for r in REGIONS}})
-            sim_from = start_utc
-            finished = False
+            batches = queue.Queue()
+            writer = threading.Thread(target=self._writer, args=(batches,), name="people-stream-writer", daemon=True)
+            writer.start()
+            sim_from, finished, tick = start_utc, False, 0
             while not finished:
-                elapsed = self._clock() - start_real
-                wait = min(self.tick_seconds, max(0.0, MAX_RUN_REAL_SECONDS - elapsed))
-                if self._stop.wait(wait):
+                tick += 1  # ticks are due at start + k * tick_seconds, however long writing takes
+                due = min(tick * self.tick_seconds, MAX_RUN_REAL_SECONDS)
+                if self._stop.wait(max(0.0, due - (self._clock() - start_real))):
                     break
                 elapsed = self._clock() - start_real
                 finished = elapsed >= MAX_RUN_REAL_SECONDS
@@ -384,14 +398,12 @@ class Simulation:
                     prob = {r: dict(self.purchase_prob[r]) for r in REGIONS}
                 rows = generator.tick(sim_from, sim_to, n_avg)
                 sale_rows = seller.sales_for(rows, prob) if seller else []
-                if rows:
-                    self._write(rows)
-                if sale_rows:
-                    self._write_sales(sale_rows)
                 with self._lock:
                     st = self.status
+                    if rows or sale_rows:
+                        batches.put((rows, sale_rows))
+                        st["pending_batches"] += 1
                     st["sim_utc"], st["batches"] = sim_to, st["batches"] + 1
-                    st["rows_written"] += len(rows)
                     st["last_batch_rows"] = len(rows)
                     st["open_stores"] = generator.open_stores(sim_to)
                     for row in rows:
@@ -408,18 +420,49 @@ class Simulation:
                         region_sales["transactions"] += 1
                         region_sales["amount"] = round(region_sales["amount"] + tx["amount"], 2)
                         region_sales["by_category"][tx["category"]] += 1
-                    st["sales_rows_written"] += len(sale_rows)
-                    st["error"] = None
                     st["remaining_seconds"] = max(0.0, MAX_RUN_REAL_SECONDS - elapsed)
                     st["history"].append({"sim_utc": sim_to, "entries": dict(st["entries"]),
                                          "exits": dict(st["exits"])})
                 sim_from = sim_to
             with self._lock:
-                self.status["state"] = "FINISHED" if finished else "STOPPED"
+                if self.status["state"] in ("RUNNING", "STOPPING") and self.status["pending_batches"]:
+                    self.status["state"] = "WRITING"  # generation is over; the writer catches up
+            batches.put(None)
+            writer.join()
+            with self._lock:
+                if self.status["state"] != "FAILED":
+                    self.status["state"] = "FINISHED" if finished else "STOPPED"
                 self.status["remaining_seconds"] = 0.0
         except Exception as exc:  # shown in the app; the simulation stops
+            if batches is not None:
+                batches.put(None)
             with self._lock:
                 self.status.update(state="FAILED", error=f"{type(exc).__name__}: {exc}")
+
+    def _writer(self, batches):
+        """Writer thread: writes the batches in order, people events before the sales they generated."""
+        failed = False
+        while True:
+            item = batches.get()
+            if item is None:
+                return
+            rows, sale_rows = item
+            if not failed:
+                try:
+                    if rows:
+                        self._write(rows)
+                    if sale_rows:
+                        self._write_sales(sale_rows)
+                    with self._lock:
+                        self.status["rows_written"] += len(rows)
+                        self.status["sales_rows_written"] += len(sale_rows)
+                except Exception as exc:  # the run stops; batches not yet written are dropped
+                    failed = True
+                    self._stop.set()
+                    with self._lock:
+                        self.status.update(state="FAILED", error=f"{type(exc).__name__}: {exc}")
+            with self._lock:
+                self.status["pending_batches"] -= 1
 
     def snapshot(self):
         with self._lock:

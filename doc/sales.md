@@ -104,7 +104,7 @@ Envelope columns:
 
 - **Empty at START:** every START empties `simulated_sales_source` (and the people source) before the run, so the table holds the current run only. See `people_stream.md` §7.
 - **Order:** in every batch the app writes the people events first, then the sales transactions they generated.
-- **Statement:** insert-only `MERGE` on the message identity (`source_topic`, `source_partition`, `source_offset`), in chunks of at most 1,000 rows. A retried batch can't insert a row twice; no row is ever updated or deleted, so the table can be read as a stream.
+- **Statement:** insert-only `MERGE` on the message identity (`source_topic`, `source_partition`, `source_offset`), in chunks of at most 10,000 rows, by the app's background writer (`people_stream.md` §7). A retried batch can't insert a row twice; no row is ever updated or deleted, so the table can be read as a stream.
 - **Failure:** a failed write stops the run with state `FAILED`, as for the people events.
 
 ## 7. Volumes
@@ -116,7 +116,7 @@ With N_AVG_PEOPLE 3000 and the default probabilities, about 600,000 people leave
 | Transactions | ≈ 120,000 | ≈ 240,000 |
 | Amount | ≈ 86 million EUR (≈ 720 EUR average per transaction) | ≈ 170 million EUR |
 
-Transactions follow the exits, so they peak when a region's stores close at 20:00: a batch can then hold up to about 9,000 transactions (measured peak 8,722), written as up to 9 statements of 1,000 rows. If writing takes longer than a batch interval, the next batch covers the longer window (`people_stream.md` §4), so simulated time doesn't drift.
+Transactions follow the exits, so they peak when a region's stores close at 20:00: a batch can then hold up to about 9,000 transactions (measured peak 8,722), still one statement. Batches are generated every 5 seconds whatever the warehouse is doing; if writing falls behind, batches wait in the writer's queue (`people_stream.md` §7).
 
 ## 8. On screen
 
