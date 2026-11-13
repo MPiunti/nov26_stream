@@ -31,6 +31,7 @@ Every store and simulation parameter is in `apps/people_stream/app/shop_config.y
 | Key | Shipped value | Meaning |
 |---|---|---|
 | `stores.opening_hour`, `stores.closing_hour` | 10, 20 | Opening hours, each store's local time |
+| `stores.max_stay_minutes` | 90 | Longest a person stays inside (1.5 h); each stay is drawn evenly between 0 and this, and ends by closing. Shown on the Simulator tab (intro line and Parameters panel). See §5 |
 | `n_avg_people.default.EUROPE` / `.AMERICAS` / `.ASIA` | 3000 each | `N_AVG_PEOPLE_EUROPE`, `_AMERICA`, `_ASIA`: average visitors per store per simulated day; slider start values and **Reset to defaults** |
 | `n_avg_people.min`, `.max`, `.step` | 2000, 6000, 100 | Slider range |
 | `purchase_prob.default.<REGION>.<CATEGORY>` | SHOES 5, BAGS 2, READY_TO_WEAR 6, ACCESSORIES 3, TRAVEL 2, SUNGLASSES 2 (every region) | PURCHASE_PROB, percent: chance that a person leaving buys one item of the category; horizontal slider start values. See `sales.md` §3 |
@@ -49,15 +50,15 @@ The screen has a header, always visible, and two tabs: **Simulator** (controls) 
 
 | Control | Behaviour |
 |---|---|
-| **START** | Starts a new run from scratch: reads the stores and sets the simulated clock to the current time. The run lasts at most 48 simulated hours (480 s). Disabled while running |
+| **START** | Starts a new run from scratch: first **empties both source tables** (`simulated_event_source` and `simulated_sales_source`, see §7), then reads the stores and sets the simulated clock to the current time. The run lasts at most 48 simulated hours (480 s). Disabled while running |
 | **STOP** | Ends the run: the generator quits after the batch it is writing, if any. Disabled while stopped |
 | **Three vertical sliders (equalizer)** | `N_AVG_PEOPLE_EUROPE`, `N_AVG_PEOPLE_AMERICA`, `N_AVG_PEOPLE_ASIA`: average visitors per store per simulated day. Range 2000–6000, step 100, default 3000 (from `shop_config.yml`). A change applies from the next batch, also while running |
 | **PURCHASE_PROB sliders** | Under each region's vertical slider, six horizontal sliders, one per merchandise category, 0–100%. See `sales.md` §3 |
 | **Reset to defaults** | Puts all sliders back to `n_avg_people.default` and `purchase_prob.default` |
 | **Parameters** | The values read from `shop_config.yml`, with what each means |
 | **Headline time** | Next to the title, while a run is `RUNNING`: the simulated UTC time rounded down to the hour, e.g. `2026-11-14 07:00 UTC`. Hidden otherwise |
+| **Browser tab title** | `People stream simulator`; while a run is `RUNNING`, followed by the simulated hour, e.g. `People stream simulator · 2026-11-14 07:00 UTC`. It changes once per simulated hour and never shows "Updating..." |
 | **Tabs** | **Simulator**: sliders, parameters and stream status; no charts. **Counters**: the in/out table, people per calendar date, and the cumulative people-out and people-in charts. START, STOP and the headline sit above the tabs |
-| **Browser tab title** | Always `People stream simulator`; it doesn't change while the screen refreshes |
 | **Sales transactions by region and category** (Counters tab) | Per region: transactions per category, total, amount in EUR, transactions per person out. See `sales.md` §8 |
 | **In, out and still inside** (Counters tab) | Per region: people in (sum of `ENTRY`), people out (sum of `EXIT`) and their difference, the people still inside open stores |
 | **People per calendar date** (Counters tab) | Bar chart: for each calendar date, one bar per region (grouped side by side) with the sum of `people_count` on that date. The date is the store's local date (from `event_timestamp`), the same day the in/out balance uses. A switch picks **People out (EXIT)** (default) or **People in (ENTRY)**. Each bar is that date's total, not a running total. The first and last dates of a run are partial, because the run starts and ends mid-day |
@@ -76,7 +77,7 @@ There is one simulation per app, shared by everyone who opens it: a second viewe
 | Store clock | Each store sees the simulated UTC time in its own `timezone_id`, with daylight-saving time |
 | Batch (tick) | Every `simulation.tick_seconds` real seconds (shipped: **5 s = 30 simulated minutes**), the simulator emits the events of the simulated time since the previous batch |
 | Run length | **At most 48 simulated hours = 480 real seconds.** The last batch ends exactly at start + 48 h; then the generator quits and the state becomes `FINISHED`. The app itself keeps running, ready for the next START |
-| Restart | START always begins a new run from scratch, from the current real time, with a new run id and a new 480-second limit; the previous run's simulated time and store occupancy are not resumed |
+| Restart | START always begins a new run from scratch, from the current real time, with a new run id and a new 480-second limit, on empty source tables; the previous run's simulated time, store occupancy and events are not kept |
 
 The batch window follows the real clock, not a counter: if a write takes longer than a tick, the next batch covers the longer window, and simulated time never drifts.
 
@@ -86,9 +87,10 @@ Each store runs its own stream, 24 simulated hours a day:
 
 1. **Opening hours:** events only between **10:00 and 20:00 local time**. Across the three macro regions some store is open at every UTC hour (see `dataset.md` §4), so the app writes around the clock.
 2. **Entries:** for the open minutes of a batch, the number of people entering is drawn from a Poisson distribution with mean `N_AVG_PEOPLE_<region> × open minutes / 600`. With the default that's 150 per store per 30-minute batch.
-3. **Exits:** drawn the same way, but never more than the people already inside from earlier batches.
-4. **Closing:** in the batch that contains 20:00 local, everyone still inside leaves in a final `EXIT` at closing time. Entries and exits balance every day.
-5. **Events:** per store and batch, at most one `ENTRY` and one `EXIT` event (plus the closing `EXIT`), whose `people_count` is the number of people; batches with zero people emit nothing. The event time is a random moment within the open part of the batch, in local time.
+3. **Stay:** each person stays inside a time drawn evenly between 0 and `stores.max_stay_minutes` (**90 minutes**, 45 on average), and leaves at entry time + stay, or just before 20:00 if that comes first. Nobody stays longer than 1.5 hours.
+4. **Exits:** in each batch, the people whose leave time falls in the batch leave. The simulator handles the people of one `ENTRY` event together: per batch it draws how many of them leave, from the share of their 0–90-minute window (cut at closing) that the batch covers.
+5. **Closing:** everyone's leave time is before 20:00 local, so a store is empty at closing and entries and exits balance every day.
+6. **Events:** per store and batch, at most one `ENTRY` and one `EXIT` event, whose `people_count` is the number of people; batches with zero people emit nothing. The `ENTRY` time is a random moment within the open part of the batch; the `EXIT` time is the latest moment within the batch at which its people can have left. Both are in local time.
 
 ## 6. Event shape
 
@@ -116,6 +118,8 @@ All simulated events pass the pipeline's validation rules, so they reach silver;
 
 ## 7. Writing the events
 
+- **Empty at START:** every START first runs `DELETE FROM` on `simulated_event_source` and `simulated_sales_source`, so each run starts from empty sources and offsets restart at 1. The tables, their permissions and their Delta history stay (no drop: dropping needs table ownership and would remove the app's permissions). The 8 hand-written events of `src/sql/05_…` are removed too; rerun `05_…` to add them back.
+- **Then run the pipeline with a full refresh of all tables:** bronze reads the source as a stream, and a stream fails after rows are deleted from its source. A full refresh (pipeline UI: **Full refresh all**, or `bundle run retail_people_counter_bronze --full-refresh-all`) rebuilds bronze, silver and quarantine from the emptied source, so they show the current run only. A normal pipeline run after a START fails. The app reminds you next to the run state.
 - **Statement:** one insert-only `MERGE` per batch into `simulated_event_source`, keyed on `source_topic`, `source_partition`, `source_offset`. A retried batch can't insert a row twice, and no row is ever updated or deleted, so bronze keeps streaming from the table.
 - **Connection:** through the SQL warehouse (Serverless Starter Warehouse), as the app's service principal; one connection reused across batches and reopened after an error.
 - **Failure:** if a write fails twice in a row, the run stops with state `FAILED` and the error on screen. Press START to begin a new run.
@@ -142,7 +146,7 @@ A run can end while some stores are open: their last `ENTRY` events have no matc
 | Before the first deploy | In the pipeline bundle, run `src/sql/01_…`, `02_…` (stores with `macro_region`), `04_…` (source table) and `08_…` to `12_…` (clients, products, sales source). The app's permissions are granted on these tables, so they must exist |
 | Check | `databricks bundle validate --strict -t dev --profile MPiunti`, from `apps/people_stream/` |
 | Deploy | From `apps/people_stream/`: `databricks bundle deploy -t dev --profile MPiunti`, then `databricks bundle run people_stream -t dev --profile MPiunti` to start the app; or, in the workspace Git folder, open `apps/people_stream/` and use **Deployments** |
-| Granted to the app | `CAN_USE` on the warehouse; `SELECT` on `dim_store`, `dim_client` and `dim_product`; `SELECT` and `MODIFY` on `simulated_event_source` and `simulated_sales_source` |
+| Granted to the app | `CAN_USE` on the warehouse; `SELECT` on `dim_store`, `dim_client` and `dim_product`; `SELECT` and `MODIFY` on `simulated_event_source` and `simulated_sales_source` (`MODIFY` also covers emptying them at START) |
 | Stop paying for it | Stop the app under **Compute → Apps**; STOP alone only stops the simulation |
 
 The pipeline bundle doesn't upload `apps/` (`sync.exclude` in the root `databricks.yml`), and the app bundle has its own state, so deploying one never changes the other.

@@ -22,6 +22,7 @@ simulation = sim.Simulation(
     load_catalog=wh.load_catalog,
     load_sales_offsets=wh.load_sales_offsets,
     write_sales=wh.write_sales,
+    clear_sources=wh.clear_sources,
 )
 CATEGORY_LABEL = {"SHOES": "Shoes", "BAGS": "Bags", "READY_TO_WEAR": "Ready-to-wear", "ACCESSORIES": "Accessories",
                   "TRAVEL": "Travel", "SUNGLASSES": "Sunglasses"}
@@ -33,8 +34,14 @@ STATE_COLOR = {"RUNNING": "success", "STARTING": "info", "STOPPED": "secondary",
 
 # update_title=None: keep the browser tab title fixed; by default Dash shows "Updating..." during every
 # callback, which flickers with the 1-second refresh.
-app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], title="People stream simulator",
-           update_title=None)
+APP_TITLE = "People stream simulator"
+app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], title=APP_TITLE, update_title=None)
+# The browser tab title follows the simulated hour while running (set in the browser, no server round trip).
+app.clientside_callback(
+    "function(title) { if (title) { document.title = title; } return window.dash_clientside.no_update; }",
+    Output("browser-title", "id"),
+    Input("browser-title", "data"),
+)
 server = app.server
 
 
@@ -148,9 +155,11 @@ def serve_layout():
         ], className="d-flex align-items-baseline flex-wrap mt-3 mb-2"),
         html.P("Streams simulated people-counter events into the pipeline's source table. "
                f"24 simulated hours take {CFG.real_seconds_per_sim_day} seconds; stores are open "
-               f"{CFG.opening_hour:02d}:00-{CFG.closing_hour:02d}:00 local time. Each run lasts at most "
+               f"{CFG.opening_hour:02d}:00-{CFG.closing_hour:02d}:00 local time, and each person stays inside "
+               f"at most {CFG.max_stay_minutes} minutes ({CFG.max_stay_minutes / 60:g} h). Each run lasts at most "
                f"{CFG.max_run_sim_hours} simulated hours ({CFG.max_run_real_seconds:g} seconds); "
-               "START always begins a new run.",
+               "START always begins a new run and first empties both source tables (people events and sales); "
+               "afterwards run the pipeline with a full refresh of all tables.",
                className="text-muted"),
         dbc.Card(dbc.CardBody(dbc.Row([
             dbc.Col([
@@ -167,6 +176,7 @@ def serve_layout():
         dcc.Store(id="sink-buttons"),
         dcc.Store(id="sink-sliders"),
         dcc.Store(id="sink-probs"),
+        dcc.Store(id="browser-title"),
         dcc.Store(id="chart-version"),
     ], fluid=False)
 
@@ -273,12 +283,16 @@ def _fmt_time(iso):
               Output("start", "disabled"),
               Output("stop", "disabled"),
               Output("headline-time", "children"),
+              Output("browser-title", "data"),
               Input("tick", "n_intervals"))
 def refresh(_):
     s = simulation.snapshot()
     state = [dbc.Badge(s["state"], color=STATE_COLOR.get(s["state"], "secondary"), className="me-2 fs-6")]
     if s["error"]:
         state.append(html.Span(s["error"], className="text-danger small"))
+    elif s.get("sources_cleared"):
+        state.append(html.Span("Source tables emptied at START: run the pipeline with Full refresh all.",
+                               className="text-muted small"))
     stats = dbc.Row([
         dbc.Col([html.Div("Simulated time", className="small text-muted"), html.Div(_fmt_time(s["sim_utc"]))]),
         dbc.Col([html.Div("Started at", className="small text-muted"), html.Div(_fmt_time(s["start_utc"]))]),
@@ -293,7 +307,8 @@ def refresh(_):
     regions = [html.Div([html.Div(f"{s['open_stores'][r]} / {s['stores'][r]} stores open"),
                          html.Div(f"{s['entries'][r]:,} visitors so far")]) for r in sim.REGIONS]
     active = s["state"] in ("RUNNING", "STARTING")
-    return state, stats, *regions, active, not active, sim.headline_time(s)
+    return (state, stats, *regions, active, not active, sim.headline_time(s),
+            sim.browser_title(s, APP_TITLE))
 
 
 if __name__ == "__main__":

@@ -102,6 +102,7 @@ Envelope columns:
 
 ## 6. Writing
 
+- **Empty at START:** every START empties `simulated_sales_source` (and the people source) before the run, so the table holds the current run only. See `people_stream.md` §7.
 - **Order:** in every batch the app writes the people events first, then the sales transactions they generated.
 - **Statement:** insert-only `MERGE` on the message identity (`source_topic`, `source_partition`, `source_offset`), in chunks of at most 1,000 rows. A retried batch can't insert a row twice; no row is ever updated or deleted, so the table can be read as a stream.
 - **Failure:** a failed write stops the run with state `FAILED`, as for the people events.

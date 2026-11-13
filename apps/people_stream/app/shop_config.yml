@@ -5,6 +5,7 @@
 stores:
   opening_hour: 10          # stores open at 10:00 local time
   closing_hour: 20          # stores close at 20:00 local time
+  max_stay_minutes: 90      # a person stays inside at most 1.5 hours (each stay drawn evenly in 0..90 min)
 
 n_avg_people:               # average visitors per store per simulated day, by macro region
   default:                  # slider start values and "Reset to defaults"

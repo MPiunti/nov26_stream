@@ -6,6 +6,8 @@ with the shipped values:
 - On START the simulated clock starts at the current real UTC time; each store sees it in its own time zone.
 - Each store is its own stream. It emits events only while open, 10:00-20:00 local time.
 - Visitors per store per simulated day average N_AVG_PEOPLE of the store's macro region.
+- Each person stays inside at most 1.5 hours: the stay is drawn evenly between 0 and max_stay_minutes,
+  and everyone leaves by closing time.
 - Each tick (5 real seconds = 30 simulated minutes) emits, per open store, at most one ENTRY
   and one EXIT event whose people_count totals the people who came in and went out in that window.
 - A run lasts at most 48 simulated hours (480 real seconds), then the generator stops (FINISHED).
@@ -31,6 +33,8 @@ MAX_RUN_SIM_HOURS = CONFIG.max_run_sim_hours  # a run ends by itself after this 
 MAX_RUN_REAL_SECONDS = CONFIG.max_run_real_seconds  # ...that many real seconds
 OPEN_HOUR, CLOSE_HOUR = CONFIG.opening_hour, CONFIG.closing_hour
 OPEN_MINUTES = (CLOSE_HOUR - OPEN_HOUR) * 60
+MAX_STAY_MINUTES = CONFIG.max_stay_minutes
+MAX_STAY = timedelta(minutes=MAX_STAY_MINUTES)
 
 REGIONS = shop_config.REGIONS
 N_AVG_DEFAULTS = dict(CONFIG.n_avg_default)
@@ -57,13 +61,44 @@ class Store:
 
 @dataclass
 class StoreStream:
-    """One store's stream: it carries the people still inside between ticks."""
+    """One store's stream: it carries the people still inside between ticks.
+
+    cohorts holds one Cohort per ENTRY event whose people haven't all left yet.
+    """
     store: Store
     tz: ZoneInfo = field(init=False)
-    occupancy: int = 0
+    cohorts: list = field(default_factory=list)
 
     def __post_init__(self):
         self.tz = ZoneInfo(self.store.timezone_id)
+
+    @property
+    def occupancy(self):
+        return sum(c.inside for c in self.cohorts)
+
+
+@dataclass
+class Cohort:
+    """The people of one ENTRY event. Each stays a time drawn evenly in [0, MAX_STAY], cut at closing."""
+    entered: datetime  # store local time
+    closing: datetime  # last moment before closing, same day
+    inside: int
+    left_share: float = 0.0  # share of the cohort's leave times already past
+
+    def latest_leave(self):
+        return min(self.entered + MAX_STAY, self.closing)
+
+    def share_left_by(self, local_time):
+        """Share of the cohort whose leave time is before local_time (uniform stay, everyone out by closing)."""
+        if local_time > self.closing:
+            return 1.0
+        return min(1.0, max(0.0, (local_time - self.entered) / MAX_STAY))
+
+
+def browser_title(snapshot, app_title):
+    """Browser tab title: the app title, plus the simulated hour while RUNNING."""
+    hour = headline_time(snapshot)
+    return f"{app_title} · {hour}" if hour else app_title
 
 
 def headline_time(snapshot):
@@ -136,6 +171,21 @@ def poisson(lam, rng):
     return max(0, int(round(rng.gauss(lam, math.sqrt(lam)))))
 
 
+def binomial(n, p, rng):
+    """People out of n who do something, each with probability p; fast approximations for large n."""
+    if n <= 0 or p <= 0:
+        return 0
+    if p >= 1:
+        return n
+    if p > 0.5:
+        return n - binomial(n, 1 - p, rng)
+    if n * p * (1 - p) >= 9:
+        return max(0, min(n, int(round(rng.gauss(n * p, math.sqrt(n * p * (1 - p)))))))
+    if n <= 50:
+        return sum(1 for _ in range(n) if rng.random() < p)
+    return min(n, poisson(n * p, rng))
+
+
 def _random_time(windows, minutes, rng):
     pick = rng.random() * minutes
     for start, end in windows:
@@ -150,6 +200,10 @@ def store_tick(stream, sim_from_utc, sim_to_utc, n_avg, rng):
     """Events of one store for the simulated window [sim_from_utc, sim_to_utc).
 
     Returns [(event_type, people_count, local_timestamp)], at most one ENTRY and one EXIT.
+    Each person who enters stays a time drawn evenly in [0, MAX_STAY] and leaves at entry + stay, or just
+    before closing if that comes first. Per cohort (one ENTRY event), the people leaving in the window are
+    drawn from the share of its leave times that fall in the window. The EXIT event counts everyone leaving
+    in the window and carries the latest moment they can have left.
     """
     local_from = sim_from_utc.astimezone(stream.tz).replace(tzinfo=None)
     local_to = sim_to_utc.astimezone(stream.tz).replace(tzinfo=None)
@@ -157,20 +211,28 @@ def store_tick(stream, sim_from_utc, sim_to_utc, n_avg, rng):
     minutes = sum((e - s).total_seconds() for s, e in windows) / 60
     events = []
     if minutes > 0:
-        lam = expected_entries(n_avg, minutes)
-        entries = poisson(lam, rng)
-        exits = min(stream.occupancy, poisson(lam, rng))  # people who came in during earlier ticks
+        entries = poisson(expected_entries(n_avg, minutes), rng)
         if entries:
-            events.append(("ENTRY", entries, _random_time(windows, minutes, rng)))
-        stream.occupancy += entries
-        if exits:
-            events.append(("EXIT", exits, _random_time(windows, minutes, rng)))
-        stream.occupancy -= exits
-    if closes_within(local_from, local_to) and stream.occupancy:
-        # Closing time: everyone still inside leaves.
-        close = max((e for _, e in windows), default=local_to) - timedelta(milliseconds=1)
-        events.append(("EXIT", stream.occupancy, close))
-        stream.occupancy = 0
+            entered = _random_time(windows, minutes, rng)
+            events.append(("ENTRY", entries, entered))
+            closing = entered.replace(hour=CLOSE_HOUR, minute=0, second=0, microsecond=0) - timedelta(milliseconds=1)
+            stream.cohorts.append(Cohort(entered, closing, entries))
+    left, last = 0, None
+    for cohort in stream.cohorts:
+        share = cohort.share_left_by(local_to)
+        if share >= 1:
+            leaving = cohort.inside
+        else:
+            leaving = binomial(cohort.inside, (share - cohort.left_share) / (1 - cohort.left_share), rng)
+        cohort.left_share = share
+        if leaving:
+            cohort.inside -= leaving
+            left += leaving
+            moment = min(local_to - timedelta(milliseconds=1), cohort.latest_leave())
+            last = moment if last is None else max(last, moment)
+    stream.cohorts = [c for c in stream.cohorts if c.inside > 0]
+    if left:
+        events.append(("EXIT", left, last))
     return events
 
 
@@ -223,15 +285,17 @@ class Simulation:
     load_stores() -> [Store]; load_offsets() -> {partition: next offset}; write(rows) inserts them.
     Sales (optional, doc/sales.md): load_catalog() -> sales.Catalog; load_sales_offsets() -> {partition:
     next offset}; write_sales(rows) inserts the transactions. Without load_catalog no sales are made.
+    clear_sources() (optional) runs first at every START and empties both source tables.
     """
 
     def __init__(self, load_stores, load_offsets, write, tick_seconds=DEFAULT_TICK_SECONDS,
                  clock=time.monotonic, now=lambda: datetime.now(timezone.utc),
-                 load_catalog=None, load_sales_offsets=None, write_sales=None):
+                 load_catalog=None, load_sales_offsets=None, write_sales=None, clear_sources=None):
         self._load_stores, self._load_offsets, self._write = load_stores, load_offsets, write
         self._load_catalog = load_catalog
         self._load_sales_offsets = load_sales_offsets or (lambda: {})
         self._write_sales = write_sales or (lambda rows: None)
+        self._clear_sources = clear_sources
         self.tick_seconds = tick_seconds
         self._clock, self._now = clock, now
         self._lock = threading.Lock()
@@ -255,7 +319,7 @@ class Simulation:
                        # Sales so far: per region, transactions, amount (EUR) and transactions per category.
                        "sales": {r: {"transactions": 0, "amount": 0.0, "by_category": {c: 0 for c in CATEGORIES}}
                                  for r in REGIONS},
-                       "sales_rows_written": 0}
+                       "sales_rows_written": 0, "sources_cleared": False}
 
     def set_purchase_prob(self, region, category, value):
         with self._lock:
@@ -286,6 +350,10 @@ class Simulation:
 
     def _run(self):
         try:
+            if self._clear_sources is not None:
+                self._clear_sources()  # every run starts from empty source tables
+                with self._lock:
+                    self.status["sources_cleared"] = True
             stores = self._load_stores()
             generator = Generator(stores, self._load_offsets())
             seller = None

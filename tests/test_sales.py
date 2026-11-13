@@ -207,6 +207,22 @@ class SimulationWithSalesTests(unittest.TestCase):
         amount = sum(json.loads(r["raw_event"])["amount"] for r in sold)
         self.assertAlmostEqual(sum(snap["sales"][r]["amount"] for r in sim.REGIONS), amount, places=2)
 
+    def test_every_start_first_empties_the_sources(self):
+        log = []
+        s = sim.Simulation(lambda: log.append("stores") or _stores()[:5], lambda: log.append("offsets") or {},
+                           lambda rows: log.append("write"), tick_seconds=0.001, clock=_FastClock(7),
+                           now=lambda: datetime(2026, 11, 13, 12, 0, tzinfo=timezone.utc),
+                           clear_sources=lambda: log.append("clear"))
+        for _ in range(2):
+            s.start()
+            s._thread.join(timeout=10)
+            self.assertTrue(s.snapshot()["sources_cleared"])
+        starts = [i for i, step in enumerate(log) if step == "clear"]
+        self.assertEqual(len(starts), 2, "cleared once per START")
+        for i in starts:
+            self.assertEqual(log[i + 1], "stores", "nothing is read or written before the sources are emptied")
+        self.assertIn("clear_sources=wh.clear_sources", read_text(*APP, "app", "app.py"))
+
     def test_no_catalog_means_no_sales(self):
         s = sim.Simulation(lambda: _stores()[:5], lambda: {}, lambda rows: None, tick_seconds=0.001,
                            clock=_FastClock(7), now=lambda: datetime(2026, 11, 13, 12, 0, tzinfo=timezone.utc))
@@ -241,6 +257,13 @@ class SalesWarehouseTests(unittest.TestCase):
         for sql in statements:
             self.assertTrue(sql.startswith("MERGE INTO workspace.test02_streaming.simulated_sales_source"))
             self.assertNotIn("WHEN MATCHED", sql.replace("WHEN NOT MATCHED", ""))
+
+    def test_clear_sources_empties_both_tables(self):
+        wh, statements = warehouse.Warehouse(), []
+        wh._execute = lambda sql, fetch=False: statements.append(sql)
+        wh.clear_sources()
+        self.assertEqual(statements, ["DELETE FROM workspace.test02_streaming.simulated_event_source",
+                                      "DELETE FROM workspace.test02_streaming.simulated_sales_source"])
 
     def test_sales_offsets_use_the_sales_topic(self):
         wh, statements = warehouse.Warehouse(), []

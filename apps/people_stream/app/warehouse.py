@@ -40,6 +40,11 @@ def offsets_sql(source_table, topic=SOURCE_TOPIC):
             f"WHERE source_topic = '{topic}' GROUP BY source_partition")
 
 
+def clear_sql(source_table):
+    """Empty a source table at START; keeps the table, its permissions and its history."""
+    return f"DELETE FROM {source_table}"
+
+
 def products_sql(product_table):
     return f"SELECT product_id, category, list_price FROM {product_table} WHERE is_active ORDER BY product_id"
 
@@ -145,6 +150,11 @@ class Warehouse:
 
     def load_offsets(self):
         return self._next_offsets("SOURCE_TABLE", SOURCE_TOPIC)
+
+    def clear_sources(self):
+        """At START: empty the people and the sales source tables, so each run starts from empty sources."""
+        for table_var in ("SOURCE_TABLE", "SALES_TABLE"):
+            self._execute(clear_sql(table(table_var)))
 
     def load_sales_offsets(self):
         return self._next_offsets("SALES_TABLE", sales.SALES_TOPIC)

@@ -242,8 +242,16 @@ class SlidersTests(unittest.TestCase):
 
     def test_browser_tab_title_is_stable(self):
         app = read_text(*APP, "app", "app.py")
-        self.assertIn('title="People stream simulator"', app)
-        self.assertIn("update_title=None", app)  # no "Updating..." flicker on every refresh
+        self.assertIn('APP_TITLE = "People stream simulator"', app)
+        self.assertIn("title=APP_TITLE, update_title=None", app)  # no "Updating..." flicker on every refresh
+        self.assertIn("document.title = title", app)
+
+    def test_browser_title_shows_the_simulated_hour_while_running(self):
+        running = {"state": "RUNNING", "sim_utc": "2026-11-14 07:42:10+00:00"}
+        self.assertEqual(sim.browser_title(running, "People stream simulator"),
+                         "People stream simulator · 2026-11-14 07:00 UTC")
+        self.assertEqual(sim.browser_title({"state": "FINISHED", "sim_utc": "2026-11-14 07:42:10+00:00"},
+                                           "People stream simulator"), "People stream simulator")
 
     def test_app_has_three_vertical_sliders(self):
         app = read_text(*APP, "app", "app.py")
@@ -281,6 +289,50 @@ class StreamTests(unittest.TestCase):
             zone = ZoneInfo(tz[e["store_id"]])
             self.assertLessEqual(w_from.astimezone(zone).replace(tzinfo=None), local, e)
             self.assertLess(local, w_to.astimezone(zone).replace(tzinfo=None), e)
+
+    def test_nobody_stays_longer_than_max_stay(self):
+        """Every person leaves at most max_stay_minutes after entering, and by closing time."""
+        self.assertEqual(sim.MAX_STAY_MINUTES, 90)
+        for store in _stores()[::20]:  # 10 stores across the regions
+            stream = sim.StoreStream(store)
+            rng = sim.random.Random(store.store_id)
+            t = datetime(2026, 11, 13, 0, 0, tzinfo=timezone.utc)
+            for _ in range(96):
+                local_to = (t + HALF_HOUR).astimezone(stream.tz).replace(tzinfo=None)
+                for _, count, ts in sim.store_tick(stream, t, t + HALF_HOUR, 3000, rng):
+                    self.assertLess(ts, local_to)
+                    self.assertTrue(sim.is_open(ts), ts)
+                for cohort in stream.cohorts:  # whoever is still inside entered less than 90 min ago
+                    self.assertGreater(cohort.entered + sim.MAX_STAY, local_to, store.store_id)
+                    self.assertGreater(cohort.closing, local_to)
+                    self.assertGreater(cohort.inside, 0)
+                t += HALF_HOUR
+
+    def test_stays_are_spread_evenly_up_to_max_stay(self):
+        """A cohort leaves evenly over the 90 minutes after entering: one sixth per 15 minutes."""
+        stream = sim.StoreStream(_stores()[0])  # Milan
+        entered = datetime(2026, 11, 13, 11, 0)
+        stream.cohorts.append(sim.Cohort(entered, entered.replace(hour=19, minute=59, second=59), 60000))
+        rng, quarter = sim.random.Random(1), timedelta(minutes=15)
+        t = datetime(2026, 11, 13, 10, 0, tzinfo=timezone.utc)  # 11:00 in Rome
+        out = []
+        for _ in range(7):
+            events = sim.store_tick(stream, t, t + quarter, 0, rng)
+            out.append(sum(c for kind, c, _ in events if kind == "EXIT"))
+            t += quarter
+        self.assertEqual(sum(out), 60000)
+        self.assertEqual(out[-1], 0, "everyone has left after 90 minutes")
+        for n in out[:6]:
+            self.assertAlmostEqual(n / 10000, 1, delta=0.05)
+
+    def test_closing_cuts_the_stay(self):
+        stream = sim.StoreStream(_stores()[0])
+        entered = datetime(2026, 11, 13, 19, 45)  # 15 minutes before closing
+        stream.cohorts.append(sim.Cohort(entered, entered.replace(hour=19, minute=59, second=59), 100))
+        t = datetime(2026, 11, 13, 18, 45, tzinfo=timezone.utc)  # 19:45 in Rome
+        events = sim.store_tick(stream, t, t + timedelta(minutes=30), 0, sim.random.Random(2))
+        self.assertEqual([(k, c) for k, c, _ in events], [("EXIT", 100)])
+        self.assertLess(events[0][2], entered.replace(hour=20, minute=0))
 
     def test_exits_balance_entries_every_store_day_that_closes(self):
         """For every store and local day whose 20:00 closing falls within the run: people in = people out.
@@ -409,7 +461,7 @@ class ShopConfigTests(unittest.TestCase):
         import shop_config
         rows = shop_config.describe(shop_config.load())
         self.assertEqual([r[1] for r in rows], [
-            "10:00 - 20:00", "Europe 3,000 / Americas 3,000 / Asia 3,000", "2,000 - 6,000, step 100",
+            "10:00 - 20:00", "90 min = 1.5 h", "Europe 3,000 / Americas 3,000 / Asia 3,000", "2,000 - 6,000, step 100",
             "All regions: SHOES 5%, BAGS 2%, READY_TO_WEAR 6%, ACCESSORIES 3%, TRAVEL 2%, SUNGLASSES 2%",
             "0% - 100%, step 1",
             "240 s = 24 h", "48 h = 480 s", "5 s = 30 min"])
@@ -437,6 +489,14 @@ class ShopConfigTests(unittest.TestCase):
 
 
 class AppBundleTests(unittest.TestCase):
+
+    def test_every_app_file_is_valid_python(self):
+        """app.py can't be imported here (no Dash), so at least parse it: catches syntax and indent errors."""
+        import ast
+        folder = path(*APP, "app")
+        for f in sorted(os.listdir(folder)):
+            if f.endswith(".py"):
+                ast.parse(read_text(*APP, "app", f), filename=f)
 
     def test_separate_bundle(self):
         app_yml = read_text(*APP, "databricks.yml")

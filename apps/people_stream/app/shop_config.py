@@ -13,7 +13,7 @@ REGIONS = ("EUROPE", "AMERICAS", "ASIA")
 CATEGORIES = ("SHOES", "BAGS", "READY_TO_WEAR", "ACCESSORIES", "TRAVEL", "SUNGLASSES")
 
 _SCHEMA = {
-    "stores": {"opening_hour": int, "closing_hour": int},
+    "stores": {"opening_hour": int, "closing_hour": int, "max_stay_minutes": int},
     "n_avg_people": {"default": {r: int for r in REGIONS}, "min": int, "max": int, "step": int},
     "purchase_prob": {"default": {r: {c: int for c in CATEGORIES} for r in REGIONS},
                       "min": int, "max": int, "step": int},
@@ -25,6 +25,7 @@ _SCHEMA = {
 class ShopConfig:
     opening_hour: int
     closing_hour: int
+    max_stay_minutes: int
     n_avg_default: dict
     n_avg_min: int
     n_avg_max: int
@@ -102,7 +103,7 @@ def load(path=CONFIG_PATH):
     _check_shape(data, _SCHEMA)
     s, n, p, sim = data["stores"], data["n_avg_people"], data["purchase_prob"], data["simulation"]
     cfg = ShopConfig(
-        opening_hour=s["opening_hour"], closing_hour=s["closing_hour"],
+        opening_hour=s["opening_hour"], closing_hour=s["closing_hour"], max_stay_minutes=s["max_stay_minutes"],
         n_avg_default=dict(n["default"]), n_avg_min=n["min"], n_avg_max=n["max"], n_avg_step=n["step"],
         purchase_prob_default={r: dict(p["default"][r]) for r in REGIONS},
         prob_min=p["min"], prob_max=p["max"], prob_step=p["step"],
@@ -112,6 +113,8 @@ def load(path=CONFIG_PATH):
     problems = []
     if not 0 <= cfg.opening_hour < cfg.closing_hour <= 24:
         problems.append("stores: need 0 <= opening_hour < closing_hour <= 24")
+    elif not 0 < cfg.max_stay_minutes <= (cfg.closing_hour - cfg.opening_hour) * 60:
+        problems.append("stores: max_stay_minutes must be > 0 and no longer than the opening hours")
     if not 0 < cfg.n_avg_min <= cfg.n_avg_max or cfg.n_avg_step <= 0:
         problems.append("n_avg_people: need 0 < min <= max and step > 0")
     elif (cfg.n_avg_max - cfg.n_avg_min) % cfg.n_avg_step:
@@ -156,6 +159,8 @@ def describe(cfg):
     return [
         ("stores.opening_hour / closing_hour", f"{cfg.opening_hour:02d}:00 - {cfg.closing_hour:02d}:00",
          "Opening hours, each store's local time"),
+        ("stores.max_stay_minutes", f"{cfg.max_stay_minutes} min = {_num(cfg.max_stay_minutes / 60)} h",
+         "Longest a person stays inside; each stay is drawn evenly between 0 and this, and ends by closing"),
         ("n_avg_people.default", " / ".join(f"{r.title()} {_num(d[r])}" for r in REGIONS),
          "Average visitors per store per simulated day; slider start values"),
         ("n_avg_people.min / max / step", f"{_num(cfg.n_avg_min)} - {_num(cfg.n_avg_max)}, step {cfg.n_avg_step}",

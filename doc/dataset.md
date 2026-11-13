@@ -167,7 +167,7 @@ The number of visitors is a parameter per macro region:
 | `N_AVG_PEOPLE_AMERICA` | Average visitors per store per day, AMERICAS stores | 3000 |
 | `N_AVG_PEOPLE_ASIA` | Average visitors per store per day, ASIA stores | 3000 |
 
-A visitor is one person entering: the sum of `people_count` over a store's `ENTRY` events in a day. Each visitor is assumed to also leave the same day, so `EXIT` totals match `ENTRY` totals by closing time.
+A visitor is one person entering: the sum of `people_count` over a store's `ENTRY` events in a day. Each visitor stays at most 1.5 hours (`stores.max_stay_minutes` in the app's `shop_config.yml`, see [`people_stream.md`](people_stream.md) §5) and leaves by closing time, so `EXIT` totals match `ENTRY` totals by closing time.
 
 With the defaults:
 
