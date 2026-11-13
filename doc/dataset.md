@@ -110,7 +110,7 @@ In production the events are assumed to arrive through **Azure Event Hubs** (Kaf
 | Column | Meaning |
 |---|---|
 | `raw_event` | The JSON payload, unparsed |
-| `source_topic` | Event Hubs topic; `people-counter-simulation` in the simulation |
+| `source_topic` | Event Hubs topic; `people-counter-simulation` for the hand-written events of `05_…`, `people-counter-app` for the people-stream app |
 | `source_partition` | Partition within the topic; `0` in the simulation |
 | `source_offset` | Offset within the partition; unique per partition |
 | `source_timestamp` | When the broker received the message (UTC) |
@@ -174,7 +174,7 @@ With the defaults:
 | ASIA (40 stores) | 120,000 | |
 | **All stores** | **600,000** | |
 
-Visitors are assumed to be spread evenly over the 10 opening hours unless a profile is defined later. The parameters aren't used by any code yet; they're the inputs for a future event generator.
+Visitors are assumed to be spread evenly over the 10 opening hours unless a profile is defined later. The people-stream app sets these parameters with its three sliders (2000–6000) and generates events from them; see [`people_stream.md`](people_stream.md).
 
 ## 6. The current simulated events
 

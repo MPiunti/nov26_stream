@@ -1,0 +1,41 @@
+# Declarative Automation Bundle for the people-stream simulator app.
+# Separate from the pipeline bundle at the repo root: deploy, start and destroy it on its own.
+# See doc/people_stream.md.
+bundle:
+  name: "retail_people_stream_bundle"
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Catalog of the store dimension and the simulated event source
+    default: workspace
+  schema:
+    description: Schema of the store dimension and the simulated event source
+    default: test02_streaming
+  app_name:
+    description: 'App name: lowercase letters, digits and hyphens, at most 30 characters.'
+    default: people-stream-${workspace.current_user.domain_friendly_name}
+  warehouse_id:
+    description: SQL warehouse the app writes through.
+    lookup:
+      warehouse: Serverless Starter Warehouse
+
+targets:
+  # The 'dev' target, for development purposes. This target is the default.
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://dbc-06fb0002-68c5.cloud.databricks.com
+
+  # The 'prod' target, used for production deployment.
+  prod:
+    mode: production
+    workspace:
+      host: https://dbc-06fb0002-68c5.cloud.databricks.com
+      # We always use /Users/michele.piunti@gmail.com for all resources to make sure we only have a single copy.
+      root_path: /Users/michele.piunti@gmail.com/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      user_name: michele.piunti@gmail.com

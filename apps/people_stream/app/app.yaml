@@ -1,0 +1,14 @@
+command: ["python", "app.py"]
+
+env:
+  # Injected from the app's sql-warehouse resource (resources/people_stream.app.yml).
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql-warehouse
+  # Keep these the same as the table resources in resources/people_stream.app.yml.
+  - name: STORE_TABLE
+    value: workspace.test02_streaming.dim_store
+  - name: SOURCE_TABLE
+    value: workspace.test02_streaming.simulated_event_source
+  # Real seconds between batches; 5 s = 30 simulated minutes. See doc/people_stream.md.
+  - name: SIM_TICK_SECONDS
+    value: "5"

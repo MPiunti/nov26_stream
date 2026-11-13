@@ -8,6 +8,7 @@ Entry point for AI agents working on this project. Start here, then read the pag
 |---|---|---|
 | **Project rules** | [`readme.md`](readme.md) | Any change: layout, workspace, tools, pipeline data flow, validation rules, working rules, tests |
 | **Dataset** | [`doc/dataset.md`](doc/dataset.md) | Touching stores, events or volumes: the store dimension and its distribution, macro regions, how people-counter events are streamed in, opening hours, the `N_AVG_PEOPLE_*` parameters |
+| **People stream app** | [`doc/people_stream.md`](doc/people_stream.md) | Touching the simulator app or its bundle (`apps/people_stream/`): screen, time model (240 s = 24 h), per-store streams, event shape, writes to the source table, volumes, deployment |
 
 Every page in `doc/` is listed in this table. Update a page in the same change as whatever it describes; describe each rule on one page only and link to it elsewhere.
 

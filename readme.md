@@ -1,6 +1,11 @@
 # nov26_stream
 
-A Databricks learning project that ingests anonymous retail people-counter events through a streaming medallion pipeline (bronze → silver + quarantine). It is packaged as a Declarative Automation Bundle, `retail_people_counter_bundle`, and runs on a Databricks Free Edition workspace.
+A Databricks learning project that ingests anonymous retail people-counter events through a streaming medallion pipeline (bronze → silver + quarantine). It is packaged as two separate Declarative Automation Bundles, and runs on a Databricks Free Edition workspace:
+
+| Bundle | Folder | Contents |
+|---|---|---|
+| `retail_people_counter_bundle` | repo root | The pipeline |
+| `retail_people_stream_bundle` | `apps/people_stream/` | The people-stream simulator app, which feeds the pipeline's source table; see [`doc/people_stream.md`](doc/people_stream.md) |
 
 The events come from a simulated source table for now, so pipeline development doesn't depend on Event Hubs. All data is synthetic.
 
@@ -14,8 +19,20 @@ nov26_stream/
 ├── agents.md                       Entry point for AI agents: index of the docs and mandatory rules
 ├── CLAUDE.md                       Entry point for Claude Code: loads this page and agents.md
 ├── doc/
-│   └── dataset.md                  Stores, macro regions, people-flow streaming, opening hours, volumes
-├── databricks.yml                  Bundle settings: name, variables, dev and prod targets
+│   ├── dataset.md                  Stores, macro regions, people-flow streaming, opening hours, volumes
+│   └── people_stream.md            The people-stream simulator app: screen, time model, generator, writes
+├── databricks.yml                  Pipeline bundle settings: name, variables, dev and prod targets; excludes apps/
+├── apps/
+│   └── people_stream/              Separate bundle: the people-stream simulator app
+│       ├── databricks.yml          App bundle settings: name, variables, warehouse lookup, targets
+│       ├── resources/
+│       │   └── people_stream.app.yml  The app: source folder, warehouse and table permissions
+│       └── app/                    App source (Python, Dash)
+│           ├── app.py              Screen: START/STOP, three region sliders, status
+│           ├── simulator.py        Event generator and run loop; standard library only
+│           ├── warehouse.py        Reads stores and offsets, inserts events through the SQL warehouse
+│           ├── app.yaml            Start command and environment variables
+│           └── requirements.txt    Pinned packages, installed by Databricks on deploy
 ├── resources/
 │   └── modeling.peoplecounter.pipeline.yml  The pipeline: catalog, schema, serverless, source files
 ├── src/
@@ -35,6 +52,7 @@ nov26_stream/
 │   ├── helpers.py                  Shared helpers for the tests
 │   ├── test_project_consistency.py Tests of the bundle, pipeline code and docs
 │   ├── test_dataset.py             Tests of the dataset rules in doc/dataset.md
+│   ├── test_people_stream.py       Tests of the simulator app, its bundle and doc/people_stream.md
 │   └── run_tests.py                Notebook that runs all tests in Databricks
 ├── pyproject.toml, uv.lock         Local Python environment (Databricks Connect), managed by `databricks environments setup-local`
 └── .gitignore
@@ -47,7 +65,7 @@ Only the files in `src/pipelines/` are pipeline source files, and the pipeline l
 | Step | Object | Created by |
 |---|---|---|
 | Store dimension | `workspace.test02_streaming.dim_store` (200 stores, primary key `store_id`, `macro_region` EUROPE / AMERICAS / ASIA); see [`doc/dataset.md`](doc/dataset.md) | `src/sql/01_…` and `02_…`, by hand |
-| Simulated source | `workspace.test02_streaming.simulated_event_source` (append-only, raw JSON) | `src/sql/04_…` and `05_…`, by hand |
+| Simulated source | `workspace.test02_streaming.simulated_event_source` (append-only, raw JSON) | Created by `src/sql/04_…`; filled by `05_…` by hand, and by the people-stream app |
 | Pre-flight check | Fails the update before anything is loaded if an input table is missing, or if `dim_store` is empty | Pipeline, `00_check_tables.py` |
 | Bronze | `bronze_people_counter_events`: raw events plus `ingestion_timestamp` | Pipeline, `01_bronze.py` |
 | Silver | `silver_people_counter_events`: parsed, typed and valid events, with the store's time zone | Pipeline, `02_silver.py` |
@@ -90,6 +108,7 @@ The 8 simulated events give 5 silver rows and 3 quarantine rows: invalid JSON (o
 | **Git folder** | `/Workspace/Users/michele.piunti@gmail.com/retail_people_counter_bundle`, linked to `github.com/MPiunti/nov26_stream`, branch `main` |
 | **Bundle target** | `dev` (development mode, the default). `prod` deploys to `/Users/michele.piunti@gmail.com/.bundle/retail_people_counter_bundle/prod` and runs as the owner. |
 | **Pipeline** | `retail_people_counter_bronze`, shown as `[dev michele_piunti] retail-people-counter-bronze-dev`. Serverless, triggered: it runs only when started. Don't set `continuous` (deprecated); to run it continuously, start it from a continuous job. |
+| **App** | `people-stream-michele-piunti`, under **Compute → Apps**, from the `retail_people_stream_bundle` bundle in `apps/people_stream/`. Writes through the Serverless Starter Warehouse. |
 
 ## Tools
 
@@ -107,7 +126,8 @@ The 8 simulated events give 5 silver rows and 3 quarantine rows: invalid JSON (o
 |---|---|
 | Check the bundle | `& $db bundle validate --strict -t dev --profile MPiunti` |
 | Get the latest code into Databricks | Owner pushes to `main`, then in the Git folder: **Pull** (or `& $db repos update <repo-id> --branch main --profile MPiunti`) |
-| Deploy | In the Git folder: **Deployments** (rocket) → `dev` → **Deploy**. Or `& $db bundle deploy -t dev --profile MPiunti`. |
+| Deploy the pipeline | In the Git folder: **Deployments** (rocket) → `dev` → **Deploy**. Or `& $db bundle deploy -t dev --profile MPiunti`, from the repo root. |
+| Deploy and start the app | From `apps/people_stream/`: `& $db bundle deploy -t dev --profile MPiunti`, then `& $db bundle run people_stream -t dev --profile MPiunti`. Or open `apps/people_stream/` in the Git folder and use **Deployments**. Run `src/sql/01_…`, `02_…` and `04_…` first. See [`doc/people_stream.md`](doc/people_stream.md) §8. |
 | Run the pipeline | Pipeline UI → **Start**, or `& $db bundle run retail_people_counter_bronze -t dev --profile MPiunti` |
 | Rebuild silver and quarantine | Pipeline UI → **Full refresh selection** on the two tables. Needed after a change to a table's schema or table features, because a normal update doesn't change an existing table's features. |
 | Run the tests on a PC | `python -m unittest discover -s tests`. See [Tests](#tests). |
@@ -147,6 +167,7 @@ The `tests/` folder checks that the project's parts agree with each other, befor
 |---|---|
 | `test_project_consistency.py` | Bundle: name, targets, includes, the files the pipeline points to, serverless only, no deprecated pipeline fields. Pipeline code: the pre-flight check runs first and covers every input table; every table with a `TIMESTAMP_NTZ` column enables `timestampNtz`; table names use the bundle's catalog and schema; every rejection code is in [Validation rules](#validation-rules) and vice versa. Simulated events: the load is an insert-only `MERGE` on topic, partition and offset; offsets are unique; the 8 events and their expected outcome. Docs: every test file is listed on this page, and `CLAUDE.md` loads this page and keeps the mandatory rules. |
 | `test_dataset.py` | The rules in [`doc/dataset.md`](doc/dataset.md): the store distribution and totals match `02_populate_dim_store.sql`; `macro_region` is defined in the create, migration, populate and validate scripts, and every country maps to one macro region the same way in each; the validation script's expected counts match; at least one store is open at every UTC hour, in winter and summer; the `N_AVG_PEOPLE_*` defaults. `agents.md` lists every page in `doc/`, and its links work. |
+| `test_people_stream.py` | The simulator app, against [`doc/people_stream.md`](doc/people_stream.md): 240 s per simulated day and 10 s per hour; START uses the current time and begins from scratch; a run finishes by itself after 48 simulated hours (480 s), and STOP quits the generator; slider range, step and default; daily visitors per store match each region's `N_AVG_PEOPLE`; events only during local opening hours; exits balance entries by closing; every event passes the silver rules; topic, partition per region and consecutive offsets; a failed write stops the run. The insert is an insert-only `MERGE` on topic, partition and offset. The app bundle is separate from the pipeline bundle, grants exactly the table permissions the app uses, and pins its packages. The time-zone tests need `tzdata` on Windows and are skipped without it. |
 
 **Running them:**
 - **On a PC:** from the repo root, run `python -m unittest discover -s tests`.

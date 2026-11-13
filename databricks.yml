@@ -6,6 +6,11 @@ include:
   - resources/*.yml
   - resources/*/*.yml
 
+# apps/ holds separate bundles (e.g. apps/people_stream), deployed on their own.
+sync:
+  exclude:
+    - apps/**
+
 # Variables used by the resources in resources/*.yml
 variables:
   catalog:
