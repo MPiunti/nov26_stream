@@ -24,34 +24,57 @@ The stores, opening hours, payload and `N_AVG_PEOPLE_*` parameters are defined i
                           bronze ─▶ silver / quarantine
 ```
 
-## 2. Screen
+## 2. Configuration: `shop_config.yml`
+
+Every store and simulation parameter is in `apps/people_stream/app/shop_config.yml`, deployed with the app. The app reads it once when it starts, checks it, and shows the values in its **Parameters** panel. After changing it, redeploy the app bundle (or restart the app).
+
+| Key | Shipped value | Meaning |
+|---|---|---|
+| `stores.opening_hour`, `stores.closing_hour` | 10, 20 | Opening hours, each store's local time |
+| `n_avg_people.default.EUROPE` / `.AMERICAS` / `.ASIA` | 3000 each | `N_AVG_PEOPLE_EUROPE`, `_AMERICA`, `_ASIA`: average visitors per store per simulated day; slider start values and **Reset to defaults** |
+| `n_avg_people.min`, `.max`, `.step` | 2000, 6000, 100 | Slider range |
+| `simulation.real_seconds_per_sim_day` | 240 | Day length: 24 simulated hours in 240 real seconds, so 1 hour = 10 s |
+| `simulation.max_run_sim_hours` | 48 | Longest run (= 480 real seconds with a 240 s day) |
+| `simulation.tick_seconds` | 5 | Real seconds between batches (= 30 simulated minutes with a 240 s day) |
+
+**Format:** nested `key: value` lines with two-space indents, whole numbers only, `#` comments. The app refuses to start, with the reason in its log, if the file has an unknown or missing key, a value that isn't a whole number, closing before opening, a default outside the slider range or off its step grid, or a batch longer than a run.
+
+The rest of this page quotes the shipped values. `dataset.md` §4 and §5 describe the same assumptions for the data as a whole.
+
+## 3. Screen
+
+The screen has a header, always visible, and two tabs: **Simulator** and **Exits**.
 
 | Control | Behaviour |
 |---|---|
 | **START** | Starts a new run from scratch: reads the stores and sets the simulated clock to the current time. The run lasts at most 48 simulated hours (480 s). Disabled while running |
 | **STOP** | Ends the run: the generator quits after the batch it is writing, if any. Disabled while stopped |
-| **Three vertical sliders (equalizer)** | `N_AVG_PEOPLE_EUROPE`, `N_AVG_PEOPLE_AMERICA`, `N_AVG_PEOPLE_ASIA`: average visitors per store per simulated day. Range 2000–6000, step 100, default 3000. A change applies from the next batch, also while running |
-| **Reset to 3000** | Puts all three sliders back to the default |
+| **Three vertical sliders (equalizer)** | `N_AVG_PEOPLE_EUROPE`, `N_AVG_PEOPLE_AMERICA`, `N_AVG_PEOPLE_ASIA`: average visitors per store per simulated day. Range 2000–6000, step 100, default 3000 (from `shop_config.yml`). A change applies from the next batch, also while running |
+| **Reset to defaults** | Puts the three sliders back to `n_avg_people.default` |
+| **Parameters** | The values read from `shop_config.yml`, with what each means |
 | **Headline time** | Next to the title, while a run is `RUNNING`: the simulated UTC time rounded down to the hour, e.g. `2026-11-14 07:00 UTC`. Hidden otherwise |
-| **Cumulative visitors chart** | Under the sliders: one line per region, the running sum of `people_count` of the region's `ENTRY` events since START (y), against simulated UTC time (x). The x axis always spans the run's 48 simulated hours from START, so the lines grow left to right; one point per batch (at most 97). Colors are fixed per region (Europe blue, Americas orange, Asia aqua), with a legend, a label at each line's end, and a shared hover tooltip. The chart keeps the last run until the next START |
+| **Tabs** | **Simulator**: sliders, the cumulative people-in chart, parameters and stream status. **Exits**: the cumulative people-out chart and a table of people in, out and still inside per region. START, STOP and the headline sit above the tabs |
+| **Cumulative visitors chart** (Simulator tab) | Under the sliders: one line per region, the running sum of `people_count` of the region's `ENTRY` events since START (y), against simulated UTC time (x). The x axis always spans the run's 48 simulated hours from START, so the lines grow left to right; one point per batch (at most 97). Colors are fixed per region (Europe blue, Americas orange, Asia aqua), with a legend, a label at each line's end, and a shared hover tooltip. The chart keeps the last run until the next START |
+| **Cumulative exits chart** (Exits tab) | The same chart for `EXIT` events: the running sum of `people_count` of the region's `EXIT` events since START (y) against simulated UTC time (x), over the run's 48 hours, same colors, legend, end labels and hover. Exits follow entries during the day and catch up at each store's 20:00 closing, so the lines climb in steps when a region closes |
+| **In, out and still inside** (Exits tab) | Per region: people in (sum of `ENTRY`), people out (sum of `EXIT`) and their difference, the people still inside open stores |
 | **Status** | State (`STOPPED` by STOP, `FINISHED` after 48 simulated hours, `STARTING`, `RUNNING`, `FAILED` with the error), simulated UTC time, start and end time, seconds left, rows written, batches, run id; per region: stores open now and visitors so far |
 
 There is one simulation per app, shared by everyone who opens it: a second viewer sees the same run and the same slider values.
 
-## 3. Time model
+## 4. Time model
 
 | Rule | Value |
 |---|---|
 | Speed | **24 simulated hours = 240 real seconds**: 1 simulated hour = 10 s, 1 simulated minute ≈ 0.17 s (factor 360) |
 | Start | On **START**, simulated time = the current real UTC time |
 | Store clock | Each store sees the simulated UTC time in its own `timezone_id`, with daylight-saving time |
-| Batch (tick) | Every `SIM_TICK_SECONDS` real seconds (default **5 s = 30 simulated minutes**), the simulator emits the events of the simulated time since the previous batch |
+| Batch (tick) | Every `simulation.tick_seconds` real seconds (shipped: **5 s = 30 simulated minutes**), the simulator emits the events of the simulated time since the previous batch |
 | Run length | **At most 48 simulated hours = 480 real seconds.** The last batch ends exactly at start + 48 h; then the generator quits and the state becomes `FINISHED`. The app itself keeps running, ready for the next START |
 | Restart | START always begins a new run from scratch, from the current real time, with a new run id and a new 480-second limit; the previous run's simulated time and store occupancy are not resumed |
 
 The batch window follows the real clock, not a counter: if a write takes longer than a tick, the next batch covers the longer window, and simulated time never drifts.
 
-## 4. One stream per store
+## 5. One stream per store
 
 Each store runs its own stream, 24 simulated hours a day:
 
@@ -61,7 +84,7 @@ Each store runs its own stream, 24 simulated hours a day:
 4. **Closing:** in the batch that contains 20:00 local, everyone still inside leaves in a final `EXIT` at closing time. Entries and exits balance every day.
 5. **Events:** per store and batch, at most one `ENTRY` and one `EXIT` event (plus the closing `EXIT`), whose `people_count` is the number of people; batches with zero people emit nothing. The event time is a random moment within the open part of the batch, in local time.
 
-## 5. Event shape
+## 6. Event shape
 
 The payload follows `dataset.md` §3.3; the values the simulator sets:
 
@@ -85,13 +108,13 @@ Envelope columns:
 
 All simulated events pass the pipeline's validation rules, so they reach silver; none go to quarantine.
 
-## 6. Writing the events
+## 7. Writing the events
 
 - **Statement:** one insert-only `MERGE` per batch into `simulated_event_source`, keyed on `source_topic`, `source_partition`, `source_offset`. A retried batch can't insert a row twice, and no row is ever updated or deleted, so bronze keeps streaming from the table.
 - **Connection:** through the SQL warehouse (Serverless Starter Warehouse), as the app's service principal; one connection reused across batches and reopened after an error.
 - **Failure:** if a write fails twice in a row, the run stops with state `FAILED` and the error on screen. Press START to begin a new run.
 
-## 7. Volumes
+## 8. Volumes
 
 With all three sliders at 3000 (measured with the generator over two simulated days):
 
@@ -106,7 +129,7 @@ Visitors scale linearly with the sliders; rows depend only on how many stores ar
 
 A run can end while some stores are open: their last `ENTRY` events have no matching closing `EXIT`, so `ENTRY` and `EXIT` totals balance per store and day only for days that reached closing time within the run.
 
-## 8. Deployment and permissions
+## 9. Deployment and permissions
 
 | Step | How |
 |---|---|

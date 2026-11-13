@@ -1,4 +1,8 @@
-"""Cumulative visitors per region over the run's simulated time. See doc/people_stream.md §2."""
+"""Cumulative ENTRY and EXIT people counts per region over the run's simulated time.
+
+See doc/people_stream.md §3. Both charts share one form: x = simulated UTC time over the run's
+max_run_sim_hours, y = running sum of people_count, one line per region with a fixed color.
+"""
 from datetime import datetime, timedelta
 
 import plotly.graph_objects as go
@@ -13,15 +17,28 @@ def _ts(iso):
     return datetime.fromisoformat(iso.replace(" ", "T")).replace(tzinfo=None)
 
 
-def cumulative_entries(snapshot, max_hours=48):
-    """Empty figure before the first run; one line per region afterwards, x fixed to the run's 48 hours."""
+KINDS = {"entries": ("ENTRY", "Cumulative people in (ENTRY)", "Press START to stream visitors"),
+         "exits": ("EXIT", "Cumulative people out (EXIT)", "Press START to stream visitors")}
+
+
+def cumulative_entries(snapshot, max_hours):
+    return cumulative(snapshot, max_hours, "entries")
+
+
+def cumulative_exits(snapshot, max_hours):
+    return cumulative(snapshot, max_hours, "exits")
+
+
+def cumulative(snapshot, max_hours, kind):
+    """Empty figure before the first run; one line per region afterwards, x fixed to the run's length."""
+    _, y_title, empty_text = KINDS[kind]
     fig = go.Figure()
     history = snapshot.get("history") or []
     start = _ts(snapshot["start_utc"]) if snapshot.get("start_utc") else None
     if start:
         x = [_ts(p["sim_utc"]) for p in history]
         for region, color in REGION_COLOR.items():
-            y = [p[region] for p in history]
+            y = [p[kind][region] for p in history]
             fig.add_trace(go.Scatter(
                 x=x, y=y, name=REGION_LABEL[region], mode="lines",
                 line={"color": color, "width": 2},
@@ -33,7 +50,7 @@ def cumulative_entries(snapshot, max_hours=48):
                                    font={"size": 11, "color": TEXT})
         fig.update_xaxes(range=[start, start + timedelta(hours=max_hours)])
     else:
-        fig.add_annotation(text="Press START to stream visitors", x=0.5, y=0.5, xref="paper", yref="paper",
+        fig.add_annotation(text=empty_text, x=0.5, y=0.5, xref="paper", yref="paper",
                            showarrow=False, font={"color": MUTED})
         fig.update_xaxes(visible=False)
         fig.update_yaxes(visible=False)
@@ -46,7 +63,7 @@ def cumulative_entries(snapshot, max_hours=48):
     )
     fig.update_xaxes(title={"text": "Simulated time (UTC)", "font": {"color": MUTED}},
                      tickformat="%d %b %H:%M", gridcolor=GRID, linecolor=GRID, tickfont={"color": MUTED})
-    fig.update_yaxes(title={"text": "Cumulative visitors (ENTRY)", "font": {"color": MUTED}},
+    fig.update_yaxes(title={"text": y_title, "font": {"color": MUTED}},
                      rangemode="tozero", gridcolor=GRID, zeroline=False, tickformat=",",
                      tickfont={"color": MUTED})
     return fig

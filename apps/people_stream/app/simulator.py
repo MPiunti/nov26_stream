@@ -1,11 +1,12 @@
 """People-stream generator: simulated people-counter events for every store. Standard library only.
 
-Functional description: doc/people_stream.md. Summary:
+Functional description: doc/people_stream.md. All parameters come from shop_config.yml;
+with the shipped values:
 - Time runs 360x faster than real time: 240 real seconds are one simulated day, 10 seconds one hour.
 - On START the simulated clock starts at the current real UTC time; each store sees it in its own time zone.
 - Each store is its own stream. It emits events only while open, 10:00-20:00 local time.
 - Visitors per store per simulated day average N_AVG_PEOPLE of the store's macro region.
-- Each tick (default 5 real seconds = 30 simulated minutes) emits, per open store, at most one ENTRY
+- Each tick (5 real seconds = 30 simulated minutes) emits, per open store, at most one ENTRY
   and one EXIT event whose people_count totals the people who came in and went out in that window.
 - A run lasts at most 48 simulated hours (480 real seconds), then the generator stops (FINISHED).
   STOP ends it earlier; START always begins a new run from the current time.
@@ -20,19 +21,23 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-REAL_SECONDS_PER_SIM_DAY = 240
-TIME_SCALE = 86400 / REAL_SECONDS_PER_SIM_DAY  # simulated seconds per real second: 360
-MAX_RUN_SIM_HOURS = 48  # a run ends by itself after 2 simulated days...
-MAX_RUN_REAL_SECONDS = MAX_RUN_SIM_HOURS * 3600 / TIME_SCALE  # ...that is 480 real seconds
-OPEN_HOUR, CLOSE_HOUR = 10, 20
+import shop_config
+
+CONFIG = shop_config.load()
+REAL_SECONDS_PER_SIM_DAY = CONFIG.real_seconds_per_sim_day
+TIME_SCALE = CONFIG.time_scale  # simulated seconds per real second
+MAX_RUN_SIM_HOURS = CONFIG.max_run_sim_hours  # a run ends by itself after this many simulated hours...
+MAX_RUN_REAL_SECONDS = CONFIG.max_run_real_seconds  # ...that many real seconds
+OPEN_HOUR, CLOSE_HOUR = CONFIG.opening_hour, CONFIG.closing_hour
 OPEN_MINUTES = (CLOSE_HOUR - OPEN_HOUR) * 60
 
-REGIONS = ("EUROPE", "AMERICAS", "ASIA")
-N_AVG_DEFAULT, N_AVG_MIN, N_AVG_MAX, N_AVG_STEP = 3000, 2000, 6000, 100
+REGIONS = shop_config.REGIONS
+N_AVG_DEFAULTS = dict(CONFIG.n_avg_default)
+N_AVG_MIN, N_AVG_MAX, N_AVG_STEP = CONFIG.n_avg_min, CONFIG.n_avg_max, CONFIG.n_avg_step
 
 SOURCE_TOPIC = "people-counter-app"
 PARTITION = {"EUROPE": 0, "AMERICAS": 1, "ASIA": 2}  # one Event Hubs partition per macro region
-DEFAULT_TICK_SECONDS = 5
+DEFAULT_TICK_SECONDS = CONFIG.tick_seconds
 
 
 @dataclass(frozen=True)
@@ -66,7 +71,7 @@ def headline_time(snapshot):
 
 def clamp_n_avg(value):
     """Slider value -> valid N_AVG_PEOPLE: within [N_AVG_MIN, N_AVG_MAX], on the step grid."""
-    value = int(round(float(value) / N_AVG_STEP)) * N_AVG_STEP
+    value = N_AVG_MIN + int(round((float(value) - N_AVG_MIN) / N_AVG_STEP)) * N_AVG_STEP
     return max(N_AVG_MIN, min(N_AVG_MAX, value))
 
 
@@ -216,16 +221,17 @@ class Simulation:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = None
-        self.n_avg = {r: N_AVG_DEFAULT for r in REGIONS}
+        self.n_avg = dict(N_AVG_DEFAULTS)
         self._reset_status()
 
     def _reset_status(self):
         self.status = {"state": "STOPPED", "start_utc": None, "sim_utc": None, "end_utc": None,
                        "run_id": None, "remaining_seconds": None,
                        "rows_written": 0, "batches": 0, "entries": {r: 0 for r in REGIONS},
+                       "exits": {r: 0 for r in REGIONS},
                        "open_stores": {r: 0 for r in REGIONS}, "stores": {r: 0 for r in REGIONS},
                        "last_batch_rows": 0, "error": None,
-                       # Cumulative visitors (ENTRY people_count) per region, one point per batch.
+                       # Cumulative people_count of ENTRY and of EXIT events per region, one point per batch.
                        "history": []}
 
     def set_n_avg(self, region, value):
@@ -262,7 +268,8 @@ class Simulation:
                                    run_id=generator.run_id, remaining_seconds=MAX_RUN_REAL_SECONDS)
                 for s in stores:
                     self.status["stores"][s.macro_region] += 1
-                self.status["history"].append({"sim_utc": start_utc, **{r: 0 for r in REGIONS}})
+                self.status["history"].append({"sim_utc": start_utc, "entries": {r: 0 for r in REGIONS},
+                                               "exits": {r: 0 for r in REGIONS}})
             sim_from = start_utc
             finished = False
             while not finished:
@@ -286,11 +293,12 @@ class Simulation:
                     st["open_stores"] = generator.open_stores(sim_to)
                     for row in rows:
                         event = json.loads(row["raw_event"])
-                        if event["event_type"] == "ENTRY":
-                            st["entries"][REGIONS[row["source_partition"]]] += event["people_count"]
+                        kind = "entries" if event["event_type"] == "ENTRY" else "exits"
+                        st[kind][REGIONS[row["source_partition"]]] += event["people_count"]
                     st["error"] = None
                     st["remaining_seconds"] = max(0.0, MAX_RUN_REAL_SECONDS - elapsed)
-                    st["history"].append({"sim_utc": sim_to, **st["entries"]})
+                    st["history"].append({"sim_utc": sim_to, "entries": dict(st["entries"]),
+                                         "exits": dict(st["exits"])})
                 sim_from = sim_to
             with self._lock:
                 self.status["state"] = "FINISHED" if finished else "STOPPED"

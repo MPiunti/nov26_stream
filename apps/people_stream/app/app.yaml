@@ -9,6 +9,5 @@ env:
     value: workspace.test02_streaming.dim_store
   - name: SOURCE_TABLE
     value: workspace.test02_streaming.simulated_event_source
-  # Real seconds between batches; 5 s = 30 simulated minutes. See doc/people_stream.md.
-  - name: SIM_TICK_SECONDS
-    value: "5"
+# Store and simulation parameters (opening hours, N_AVG_PEOPLE, day length, run length, batch
+# interval) are in shop_config.yml. See doc/people_stream.md, "Configuration".

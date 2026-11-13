@@ -1,0 +1,21 @@
+# Store and simulation parameters of the people-stream app. See doc/people_stream.md, "Configuration".
+# Read once when the app starts: after a change, redeploy the app bundle (or restart the app).
+# Format: nested "key: value" lines, two-space indents, whole numbers, # comments.
+
+stores:
+  opening_hour: 10          # stores open at 10:00 local time
+  closing_hour: 20          # stores close at 20:00 local time
+
+n_avg_people:               # average visitors per store per simulated day, by macro region
+  default:                  # slider start values and "Reset to defaults"
+    EUROPE: 3000            # N_AVG_PEOPLE_EUROPE
+    AMERICAS: 3000          # N_AVG_PEOPLE_AMERICA
+    ASIA: 3000              # N_AVG_PEOPLE_ASIA
+  min: 2000                 # slider range
+  max: 6000
+  step: 100
+
+simulation:
+  real_seconds_per_sim_day: 240   # 24 simulated hours take 240 real seconds (1 hour = 10 s)
+  max_run_sim_hours: 48           # a run ends by itself after 48 simulated hours
+  tick_seconds: 5                 # real seconds between batches (5 s = 30 simulated minutes)

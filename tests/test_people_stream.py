@@ -64,7 +64,7 @@ class TimeModelTests(unittest.TestCase):
     def test_default_tick_is_30_simulated_minutes(self):
         start = datetime(2026, 1, 1, tzinfo=timezone.utc)
         self.assertEqual(sim.sim_time(start, sim.DEFAULT_TICK_SECONDS) - start, HALF_HOUR)
-        self.assertIn('value: "5"', read_text(*APP, "app", "app.yaml"))
+        self.assertIn("tick_seconds: 5 ", read_text(*APP, "app", "shop_config.yml"))
 
     def test_opening_hours(self):
         self.assertEqual((sim.OPEN_HOUR, sim.CLOSE_HOUR), (10, 20))
@@ -145,16 +145,21 @@ class RunLengthTests(unittest.TestCase):
         s._thread.join(timeout=10)
         snap = s.snapshot()
         history = snap["history"]
-        self.assertEqual(history[0], {"sim_utc": str(self.START), "EUROPE": 0, "AMERICAS": 0, "ASIA": 0})
+        zero = {r: 0 for r in sim.REGIONS}
+        self.assertEqual(history[0], {"sim_utc": str(self.START), "entries": zero, "exits": zero})
         self.assertTrue(history[-1]["sim_utc"].startswith(str(self.START + timedelta(hours=48))[:19]))
         self.assertLessEqual(len(history), 97)
-        for region in sim.REGIONS:
-            values = [p[region] for p in history]
-            self.assertEqual(values, sorted(values), f"{region} isn't cumulative")
-            self.assertEqual(values[-1], snap["entries"][region])
-        entries = sum(json.loads(r["raw_event"])["people_count"] for r in written
-                      if json.loads(r["raw_event"])["event_type"] == "ENTRY")
-        self.assertEqual(sum(history[-1][r] for r in sim.REGIONS), entries)
+        for kind, event_type in (("entries", "ENTRY"), ("exits", "EXIT")):
+            for region in sim.REGIONS:
+                values = [p[kind][region] for p in history]
+                self.assertEqual(values, sorted(values), f"{kind} {region} isn't cumulative")
+                self.assertEqual(values[-1], snap[kind][region])
+            people = sum(json.loads(r["raw_event"])["people_count"] for r in written
+                         if json.loads(r["raw_event"])["event_type"] == event_type)
+            self.assertEqual(sum(history[-1][kind].values()), people, kind)
+        for point in history:  # nobody leaves before entering
+            for region in sim.REGIONS:
+                self.assertLessEqual(point["exits"][region], point["entries"][region])
 
     def test_headline_shows_the_simulated_hour_only_while_running(self):
         self.assertEqual(sim.headline_time({"state": "RUNNING", "sim_utc": "2026-11-14 07:42:10+00:00"}),
@@ -167,7 +172,16 @@ class RunLengthTests(unittest.TestCase):
         self.assertIn('REGION_COLOR = {"EUROPE": "#2a78d6", "AMERICAS": "#eb6834", "ASIA": "#1baf7a"}', chart)
         self.assertIn("range=[start, start + timedelta(hours=max_hours)]", chart)
         self.assertIn('"width": 2', chart)
-        self.assertIn('id="entries-chart"', read_text(*APP, "app", "app.py"))
+        app = read_text(*APP, "app", "app.py")
+        self.assertIn('"entries-chart", charts.cumulative_entries(', app)
+        self.assertIn('"exits-chart", charts.cumulative_exits(', app)
+        self.assertIn('y = [p[kind][region] for p in history]', chart)
+
+    def test_exits_have_their_own_tab(self):
+        app = read_text(*APP, "app", "app.py")
+        self.assertIn('dbc.Tab(label="Simulator", tab_id="tab-simulator"', app)
+        self.assertIn('dbc.Tab(label="Exits", tab_id="tab-exits", children=exits_tab())', app)
+        self.assertIn('Output("exits-chart", "figure")', app)
 
     def test_stop_quits_the_generator(self):
         s = sim.Simulation(lambda: _stores()[:3], lambda: {}, lambda rows: None, tick_seconds=0.01,
@@ -183,7 +197,8 @@ class RunLengthTests(unittest.TestCase):
 class SlidersTests(unittest.TestCase):
 
     def test_range_and_default(self):
-        self.assertEqual((sim.N_AVG_MIN, sim.N_AVG_DEFAULT, sim.N_AVG_MAX), (2000, 3000, 6000))
+        self.assertEqual((sim.N_AVG_MIN, sim.N_AVG_MAX, sim.N_AVG_STEP), (2000, 6000, 100))
+        self.assertEqual(sim.N_AVG_DEFAULTS, {"EUROPE": 3000, "AMERICAS": 3000, "ASIA": 3000})
         self.assertEqual(sim.clamp_n_avg(1500), 2000)
         self.assertEqual(sim.clamp_n_avg(9000), 6000)
         self.assertEqual(sim.clamp_n_avg(3049), 3000)
@@ -231,17 +246,33 @@ class StreamTests(unittest.TestCase):
             self.assertLessEqual(w_from.astimezone(zone).replace(tzinfo=None), local, e)
             self.assertLess(local, w_to.astimezone(zone).replace(tzinfo=None), e)
 
-    def test_exits_balance_entries_by_closing(self):
-        g = sim.Generator(_stores()[:20], seed=5)
-        rows, _ = _run(g, days=2, n_avg={r: 3000 for r in sim.REGIONS},
-                       start=datetime(2026, 11, 13, 0, 0, tzinfo=timezone.utc))
-        net = defaultdict(int)
-        for e in _events(rows):
-            net[e["store_id"]] += e["people_count"] if e["event_type"] == "ENTRY" else -e["people_count"]
-            self.assertGreaterEqual(e["people_count"], 1)
-        for stream in g.streams:  # 2026-11-15 00:00 UTC: all 20 Italian stores are closed
-            self.assertEqual(stream.occupancy, 0)
-            self.assertEqual(net[stream.store.store_id], 0)
+    def test_exits_balance_entries_every_store_day_that_closes(self):
+        """For every store and local day whose 20:00 closing falls within the run: people in = people out.
+
+        Days still open when the run ends (48 h limit or STOP) are left unbalanced, as documented.
+        """
+        stores = _stores()
+        zones = {s.store_id: ZoneInfo(s.timezone_id) for s in stores}
+        for start in (datetime(2026, 11, 13, 15, 42, tzinfo=timezone.utc),   # winter, starts mid-day
+                      datetime(2026, 7, 15, 9, 5, tzinfo=timezone.utc)):      # summer time
+            g = sim.Generator(stores, seed=start.hour)
+            rows, _ = _run(g, days=2, n_avg={r: 3000 for r in sim.REGIONS}, start=start)
+            end = start + timedelta(hours=48)
+            balance = defaultdict(lambda: [0, 0])
+            for e in _events(rows):
+                self.assertGreaterEqual(e["people_count"], 1)
+                balance[(e["store_id"], e["event_timestamp"][:10])][e["event_type"] == "EXIT"] += e["people_count"]
+            closed = 0
+            for (store_id, day), (people_in, people_out) in balance.items():
+                self.assertLessEqual(people_out, people_in, (store_id, day))
+                if datetime.fromisoformat(f"{day}T20:00") <= end.astimezone(zones[store_id]).replace(tzinfo=None):
+                    self.assertEqual(people_in, people_out, f"{store_id} {day}: {people_in} in, {people_out} out")
+                    closed += 1
+            self.assertEqual(closed, 400, "every store closes twice in 48 hours")
+            inside = {s.store.store_id: s.occupancy for s in g.streams}
+            for store_id, people in inside.items():  # only stores still open at the end keep people inside
+                if people:
+                    self.assertTrue(sim.is_open(end.astimezone(zones[store_id])), store_id)
 
     def test_every_event_passes_the_silver_rules(self):
         rows, _ = _run(sim.Generator(_stores(), seed=11), days=1, n_avg={r: 3000 for r in sim.REGIONS})
@@ -300,6 +331,71 @@ class WarehouseSqlTests(unittest.TestCase):
                 warehouse.table("SOURCE_TABLE")
         finally:
             del os.environ["SOURCE_TABLE"]
+
+
+@unittest.skipIf(sim is None, SKIP_REASON)
+class ShopConfigTests(unittest.TestCase):
+    """shop_config.yml holds every store and simulation parameter; the app reads and shows them."""
+
+    def _load(self, text):
+        import shop_config
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False, encoding="utf-8") as f:
+            f.write(text)
+        try:
+            return shop_config.load(f.name)
+        finally:
+            os.remove(f.name)
+
+    def test_shipped_values(self):
+        import shop_config
+        cfg = shop_config.load()
+        self.assertEqual((cfg.opening_hour, cfg.closing_hour), (10, 20))
+        self.assertEqual(cfg.n_avg_default, {"EUROPE": 3000, "AMERICAS": 3000, "ASIA": 3000})
+        self.assertEqual((cfg.n_avg_min, cfg.n_avg_max, cfg.n_avg_step), (2000, 6000, 100))
+        self.assertEqual((cfg.real_seconds_per_sim_day, cfg.max_run_sim_hours, cfg.tick_seconds), (240, 48, 5))
+        self.assertEqual((cfg.time_scale, cfg.max_run_real_seconds, cfg.tick_sim_minutes), (360, 480, 30))
+
+    def test_simulator_takes_every_parameter_from_the_config(self):
+        cfg = sim.CONFIG
+        self.assertEqual((sim.OPEN_HOUR, sim.CLOSE_HOUR), (cfg.opening_hour, cfg.closing_hour))
+        self.assertEqual(sim.N_AVG_DEFAULTS, cfg.n_avg_default)
+        self.assertEqual((sim.N_AVG_MIN, sim.N_AVG_MAX, sim.N_AVG_STEP),
+                         (cfg.n_avg_min, cfg.n_avg_max, cfg.n_avg_step))
+        self.assertEqual((sim.REAL_SECONDS_PER_SIM_DAY, sim.MAX_RUN_SIM_HOURS, sim.DEFAULT_TICK_SECONDS),
+                         (cfg.real_seconds_per_sim_day, cfg.max_run_sim_hours, cfg.tick_seconds))
+        code = re.sub(r'"""[\s\S]*?"""|#[^\n]*', "",
+                      read_text(*APP, "app", "simulator.py") + read_text(*APP, "app", "app.py"))
+        for literal in ("240", "480", "3000", "2000", "6000", "= 10", "= 20", "= 48"):
+            self.assertNotIn(literal, code, f"{literal} is hard-coded; take it from shop_config.yml")
+
+    def test_app_shows_the_parameters(self):
+        import shop_config
+        rows = shop_config.describe(shop_config.load())
+        self.assertEqual([r[1] for r in rows], [
+            "10:00 - 20:00", "Europe 3,000 / Americas 3,000 / Asia 3,000", "2,000 - 6,000, step 100",
+            "240 s = 24 h", "48 h = 480 s", "5 s = 30 min"])
+        self.assertIn("parameters_card()", read_text(*APP, "app", "app.py"))
+        self.assertNotIn("SIM_TICK_SECONDS", read_text(*APP, "app", "app.yaml"))
+
+    def test_other_values_take_effect(self):
+        cfg = self._load(read_text(*APP, "app", "shop_config.yml")
+                         .replace("opening_hour: 10", "opening_hour: 9")
+                         .replace("real_seconds_per_sim_day: 240", "real_seconds_per_sim_day: 480"))
+        self.assertEqual((cfg.opening_hour, cfg.time_scale, cfg.max_run_real_seconds), (9, 180, 960))
+
+    def test_bad_files_are_rejected(self):
+        good = read_text(*APP, "app", "shop_config.yml")
+        for bad, why in ((good.replace("closing_hour: 20", "closing_hour: 8"), "closing before opening"),
+                         (good.replace("    ASIA: 3000", "    ASIA: 3050"), "default off the step grid"),
+                         (good.replace("    ASIA: 3000", "    ASIA: 9000"), "default out of range"),
+                         (good.replace("  tick_seconds: 5", "  tick_seconds: 0"), "zero tick"),
+                         (good.replace("  step: 100", "  step: 100\n  extra: 1"), "unknown key"),
+                         (good.replace("  max_run_sim_hours: 48", ""), "missing key"),
+                         (good.replace("opening_hour: 10", "opening_hour: ten"), "not a number"),
+                         (good.replace("opening_hour: 10", "opening_hour: 10.5"), "not whole")):
+            with self.assertRaises(ValueError, msg=why):
+                self._load(bad)
 
 
 class AppBundleTests(unittest.TestCase):
