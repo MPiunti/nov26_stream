@@ -11,39 +11,43 @@ This page gives the general rules for anyone working on the project, people and 
 ```
 nov26_stream/
 ├── readme.md                       General rules (this page)
-├── CLAUDE.md                       Entry point for Claude Code: loads this page
+├── agents.md                       Entry point for AI agents: index of the docs and mandatory rules
+├── CLAUDE.md                       Entry point for Claude Code: loads this page and agents.md
+├── doc/
+│   └── dataset.md                  Stores, macro regions, people-flow streaming, opening hours, volumes
 ├── databricks.yml                  Bundle settings: name, variables, dev and prod targets
 ├── resources/
 │   └── modeling.peoplecounter.pipeline.yml  The pipeline: catalog, schema, serverless, source files
 ├── src/
-│   ├── pipelines/
-│   │   ├── 00_check_tables.py      Pipeline source: pre-flight check that the input tables exist
-│   │   ├── 01_bronze.py            Pipeline source: bronze streaming ingestion
-│   │   ├── 02_silver.py            Pipeline source: parsing, validation, silver and quarantine tables
-│   │   ├── 04_create_simulated_event_source.sql   Setup: creates the simulated source table
-│   │   ├── 05_insert_simulated_events.sql         Load: merges 8 test events (5 valid, 3 invalid); idempotent
-│   │   └── 06_validate_simulated_event_source.sql Check: the source table's contents
-│   └── sql/
-│       ├── 01_create_dim_store.sql         Setup: creates the store dimension
-│       ├── 02_populate_dim_store.sql       Setup: loads 200 stores (idempotent MERGE)
-│       ├── 03_validate_dim_store.sql       Check: store counts, keys, time zones
-│       └── 07_validate_bronze.sql.dbquery.ipynb  Check: the bronze table's contents
+│   ├── pipelines/                  Pipeline source files only
+│   │   ├── 00_check_tables.py      Pre-flight check that the input tables exist
+│   │   ├── 01_bronze.py            Bronze streaming ingestion
+│   │   └── 02_silver.py            Parsing, validation, silver and quarantine tables
+│   └── sql/                        Scripts run by hand on the SQL warehouse, in number order
+│       ├── 01_create_dim_store.sql                Setup: creates the store dimension, or adds macro_region to an older one; idempotent
+│       ├── 02_populate_dim_store.sql              Setup: loads 200 stores and their macro region (idempotent MERGE)
+│       ├── 03_validate_dim_store.sql              Check: store counts, macro regions, keys, time zones
+│       ├── 04_create_simulated_event_source.sql   Setup: creates the simulated source table
+│       ├── 05_insert_simulated_events.sql         Load: merges 8 test events (5 valid, 3 invalid); idempotent
+│       ├── 06_validate_simulated_event_source.sql Check: the source table's contents
+│       └── 07_validate_bronze.sql.dbquery.ipynb   Check: the bronze table's contents
 ├── tests/                          Tests of the bundle, pipeline code and docs
 │   ├── helpers.py                  Shared helpers for the tests
-│   ├── test_project_consistency.py The tests
+│   ├── test_project_consistency.py Tests of the bundle, pipeline code and docs
+│   ├── test_dataset.py             Tests of the dataset rules in doc/dataset.md
 │   └── run_tests.py                Notebook that runs all tests in Databricks
 ├── pyproject.toml, uv.lock         Local Python environment (Databricks Connect), managed by `databricks environments setup-local`
 └── .gitignore
 ```
 
-Only `00_check_tables.py`, `01_bronze.py` and `02_silver.py` are pipeline source files. The numbered `.sql` files are run by hand, in number order, on the SQL warehouse.
+Only the files in `src/pipelines/` are pipeline source files, and the pipeline lists each one by name. The scripts in `src/sql/` are run by hand, in number order, on the SQL warehouse; never put them in `src/pipelines/`.
 
 ## Data flow
 
 | Step | Object | Created by |
 |---|---|---|
-| Store dimension | `workspace.test02_streaming.dim_store` (200 stores, primary key `store_id`) | `src/sql/01_…` and `02_…`, by hand |
-| Simulated source | `workspace.test02_streaming.simulated_event_source` (append-only, raw JSON) | `src/pipelines/04_…` and `05_…`, by hand |
+| Store dimension | `workspace.test02_streaming.dim_store` (200 stores, primary key `store_id`, `macro_region` EUROPE / AMERICAS / ASIA); see [`doc/dataset.md`](doc/dataset.md) | `src/sql/01_…` and `02_…`, by hand |
+| Simulated source | `workspace.test02_streaming.simulated_event_source` (append-only, raw JSON) | `src/sql/04_…` and `05_…`, by hand |
 | Pre-flight check | Fails the update before anything is loaded if an input table is missing, or if `dim_store` is empty | Pipeline, `00_check_tables.py` |
 | Bronze | `bronze_people_counter_events`: raw events plus `ingestion_timestamp` | Pipeline, `01_bronze.py` |
 | Silver | `silver_people_counter_events`: parsed, typed and valid events, with the store's time zone | Pipeline, `02_silver.py` |
@@ -142,6 +146,7 @@ The `tests/` folder checks that the project's parts agree with each other, befor
 | File | Checks |
 |---|---|
 | `test_project_consistency.py` | Bundle: name, targets, includes, the files the pipeline points to, serverless only, no deprecated pipeline fields. Pipeline code: the pre-flight check runs first and covers every input table; every table with a `TIMESTAMP_NTZ` column enables `timestampNtz`; table names use the bundle's catalog and schema; every rejection code is in [Validation rules](#validation-rules) and vice versa. Simulated events: the load is an insert-only `MERGE` on topic, partition and offset; offsets are unique; the 8 events and their expected outcome. Docs: every test file is listed on this page, and `CLAUDE.md` loads this page and keeps the mandatory rules. |
+| `test_dataset.py` | The rules in [`doc/dataset.md`](doc/dataset.md): the store distribution and totals match `02_populate_dim_store.sql`; `macro_region` is defined in the create, migration, populate and validate scripts, and every country maps to one macro region the same way in each; the validation script's expected counts match; at least one store is open at every UTC hour, in winter and summer; the `N_AVG_PEOPLE_*` defaults. `agents.md` lists every page in `doc/`, and its links work. |
 
 **Running them:**
 - **On a PC:** from the repo root, run `python -m unittest discover -s tests`.

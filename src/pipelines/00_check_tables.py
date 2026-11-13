@@ -12,7 +12,7 @@ from pyspark.sql import SparkSession
 REQUIRED_TABLES = {
     # table: (how to create it, must have rows)
     "workspace.test02_streaming.simulated_event_source": (
-        "src/pipelines/04_create_simulated_event_source.sql", False
+        "src/sql/04_create_simulated_event_source.sql", False
     ),
     "workspace.test02_streaming.dim_store": (
         "src/sql/01_create_dim_store.sql and 02_populate_dim_store.sql", True

@@ -2,6 +2,10 @@
 -- ============================================================
 -- 01 - Create Silver store dimension
 -- Target: workspace.test02_streaming.dim_store
+--
+-- Idempotent: creates the schema and table if missing, and adds
+-- macro_region to a table created before it existed. Safe to rerun.
+-- Then run 02_populate_dim_store.sql.
 -- ============================================================
 
 CREATE SCHEMA IF NOT EXISTS workspace.test02_streaming
@@ -28,6 +32,9 @@ CREATE TABLE IF NOT EXISTS workspace.test02_streaming.dim_store
     region STRING
         COMMENT 'State, province or administrative region',
 
+    macro_region STRING
+        COMMENT 'Macro region derived from country_code: EUROPE, AMERICAS or ASIA',
+
     timezone_id STRING NOT NULL
         COMMENT 'IANA timezone identifier',
 
@@ -45,3 +52,21 @@ CREATE TABLE IF NOT EXISTS workspace.test02_streaming.dim_store
 )
 USING DELTA
 COMMENT 'Silver dimension containing global retail store master data';
+
+
+-- Upgrade a dim_store created before macro_region existed.
+-- ADD COLUMN IF NOT EXISTS isn't supported, so check information_schema first.
+BEGIN
+    IF (
+        SELECT COUNT(*)
+        FROM workspace.information_schema.columns
+        WHERE table_schema = 'test02_streaming'
+          AND table_name = 'dim_store'
+          AND column_name = 'macro_region'
+    ) = 0 THEN
+        ALTER TABLE workspace.test02_streaming.dim_store
+        ADD COLUMN macro_region STRING
+            COMMENT 'Macro region derived from country_code: EUROPE, AMERICAS or ASIA'
+            AFTER region;
+    END IF;
+END;

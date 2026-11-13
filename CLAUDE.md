@@ -1,8 +1,8 @@
 # CLAUDE.md
 
-Follow the project rules in @readme.md.
+Follow the project rules in @readme.md and the documentation index in @agents.md.
 
-Before changing the pipeline, read "Data flow" and "Validation rules" in `readme.md`, and update them in the same change as whatever they describe.
+Before changing the pipeline, read "Data flow" and "Validation rules" in `readme.md`, and update them in the same change as whatever they describe. Before changing stores, events or volumes, read `doc/dataset.md` and update it in the same change.
 
 **Tests:** run `python -m unittest discover -s tests` before handing over a change, and add a test for every new feature or data rule. See "Tests" in `readme.md`.
 

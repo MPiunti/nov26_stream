@@ -12,7 +12,7 @@ from helpers import ROOT, constants, parse, path, pipeline_tables, read_text
 CHECK_FILE = "src/pipelines/00_check_tables.py"
 PIPELINE_FILES = [CHECK_FILE, "src/pipelines/01_bronze.py", "src/pipelines/02_silver.py"]
 PIPELINE_YML = ("resources", "modeling.peoplecounter.pipeline.yml")
-INSERT_SQL = ("src", "pipelines", "05_insert_simulated_events.sql")
+INSERT_SQL = ("src", "sql", "05_insert_simulated_events.sql")
 
 
 def _bundle_variable_default(name):
@@ -148,6 +148,12 @@ class PipelineCodeTests(unittest.TestCase):
             body = source.split(f"def {table}():", 1)[1].split("\n# ====", 1)[0]
             selected = re.findall(r'^\s+"(\w+)",?\s*$', body.split(".select(", 1)[1], re.M)
             self.assertEqual(selected, columns, f"{table} selects columns out of step with {schema_name}")
+
+    def test_pipelines_folder_holds_only_pipeline_sources(self):
+        """Hand-run SQL scripts belong in src/sql/, not next to the pipeline sources."""
+        on_disk = sorted(f"src/pipelines/{f}" for f in os.listdir(path("src", "pipelines"))
+                         if os.path.isfile(path("src", "pipelines", f)))
+        self.assertEqual(on_disk, sorted(PIPELINE_FILES))
 
     def test_check_tables_runs_first(self):
         listed = re.findall(r"path:\s*\.\./(\S+)", read_text(*PIPELINE_YML))

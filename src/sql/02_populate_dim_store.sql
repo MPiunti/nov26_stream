@@ -5,14 +5,18 @@
 -- Expected records: 200
 --
 -- Distribution:
---   Italy             40
---   Other EU          60
---   United States     60
---   China             14
---   Japan             13
---   South Korea       13
+--   Italy             40   EUROPE
+--   Other EU          60   EUROPE
+--   United States     60   AMERICAS
+--   China             14   ASIA
+--   Japan             13   ASIA
+--   South Korea       13   ASIA
 --
--- Idempotent execution: MERGE by natural store_id
+-- Macro regions: EUROPE 100, AMERICAS 60, ASIA 40.
+-- Full rules: doc/dataset.md, "Store dimension".
+--
+-- Idempotent execution: MERGE by natural store_id. New stores are
+-- inserted; existing stores get macro_region filled or corrected.
 -- ============================================================
 
 MERGE INTO workspace.test02_streaming.dim_store AS target
@@ -93,6 +97,13 @@ USING (
             country_name,
             city,
             region,
+
+            CASE
+                WHEN country_code IN ('IT', 'FR', 'DE', 'ES', 'NL', 'BE', 'AT', 'PT', 'SE') THEN 'EUROPE'
+                WHEN country_code IN ('US') THEN 'AMERICAS'
+                WHEN country_code IN ('CN', 'JP', 'KR') THEN 'ASIA'
+            END AS macro_region,
+
             timezone_id
 
         FROM city_allocation
@@ -108,6 +119,10 @@ USING (
 
 ON target.store_id = source.store_id
 
+WHEN MATCHED AND NOT (target.macro_region <=> source.macro_region) THEN UPDATE SET
+    target.macro_region = source.macro_region,
+    target.updated_at = CURRENT_TIMESTAMP()
+
 WHEN NOT MATCHED THEN INSERT (
     store_id,
     store_name,
@@ -115,6 +130,7 @@ WHEN NOT MATCHED THEN INSERT (
     country_name,
     city,
     region,
+    macro_region,
     timezone_id,
     is_active,
     created_at,
@@ -127,6 +143,7 @@ VALUES (
     source.country_name,
     source.city,
     source.region,
+    source.macro_region,
     source.timezone_id,
     TRUE,
     CURRENT_TIMESTAMP(),

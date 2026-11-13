@@ -32,6 +32,23 @@ actual_country AS (
     GROUP BY country_code
 ),
 
+expected_macro_region AS (
+    SELECT *
+    FROM VALUES
+        ('EUROPE', 100),
+        ('AMERICAS', 60),
+        ('ASIA', 40)
+    AS t(macro_region, expected_count)
+),
+
+actual_macro_region AS (
+    SELECT
+        macro_region,
+        COUNT(*) AS actual_count
+    FROM workspace.test02_streaming.dim_store
+    GROUP BY macro_region
+),
+
 checks AS (
 
     -- Total number of stores
@@ -51,6 +68,32 @@ checks AS (
     FROM expected_country e
     LEFT JOIN actual_country a
         ON e.country_code = a.country_code
+
+    UNION ALL
+
+    -- Expected macro region distribution
+    SELECT
+        CONCAT('MACRO_REGION_', e.macro_region),
+        e.expected_count,
+        COALESCE(a.actual_count, 0)
+    FROM expected_macro_region e
+    LEFT JOIN actual_macro_region a
+        ON e.macro_region = a.macro_region
+
+    UNION ALL
+
+    -- Macro region missing or not matching the country
+    SELECT
+        'INVALID_COUNTRY_MACRO_REGION',
+        0,
+        COUNT(*)
+    FROM workspace.test02_streaming.dim_store
+    WHERE macro_region IS NULL
+       OR NOT (
+        (country_code IN ('IT', 'FR', 'DE', 'ES', 'NL', 'BE', 'AT', 'PT', 'SE') AND macro_region = 'EUROPE')
+        OR (country_code = 'US' AND macro_region = 'AMERICAS')
+        OR (country_code IN ('CN', 'JP', 'KR') AND macro_region = 'ASIA')
+    )
 
     UNION ALL
 
