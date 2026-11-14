@@ -136,6 +136,56 @@ def headline_time(snapshot):
     return f"{str(snapshot['sim_utc'])[:13].replace('T', ' ')}:00 UTC"
 
 
+def _parse_utc(value):
+    """A snapshot time (datetime or ISO text) as an aware UTC datetime, or None."""
+    if not value:
+        return None
+    t = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    return t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t.astimezone(timezone.utc)
+
+
+def gmt_text(value):
+    """'14 Nov 2026 20:12:29 GMT' for the headline; '—' when there's no time yet."""
+    t = _parse_utc(value)
+    return t.strftime("%d %b %Y %H:%M:%S GMT") if t else "—"
+
+
+def clock_angles(sim_utc):
+    """(hour hand, minute hand) angles in degrees for the analog clock of the simulated GMT time.
+
+    The angles count from the Unix epoch, so they only ever grow: the hands always turn forwards, also past
+    12 o'clock. Their position on the dial is the angle modulo 360. (0, 0), both hands up, without a time.
+    """
+    t = _parse_utc(sim_utc)
+    if t is None:
+        return 0.0, 0.0
+    minutes = int(t.timestamp() // 60)
+    return minutes * 0.5, minutes * 6.0
+
+
+def headline(snapshot):
+    """What the headline panel shows: simulation id, start and simulated time in GMT, and the clock's angles."""
+    hour, minute = clock_angles(snapshot.get("sim_utc"))
+    return {
+        "simulation_id": snapshot.get("run_id") or "—",
+        "started": gmt_text(snapshot.get("start_utc")),
+        "simulated": gmt_text(snapshot.get("sim_utc")),
+        "hour_angle": hour,
+        "minute_angle": minute,
+        "has_time": bool(snapshot.get("sim_utc")),
+        # Animate the hands only between batches of a running simulation: the first batch jumps from "no time"
+        # (or from the previous simulation's end) and would spin the hands through thousands of turns.
+        "animate": snapshot.get("state") == "RUNNING" and (snapshot.get("batches") or 0) >= 2,
+    }
+
+
+def clock_class(h):
+    """CSS classes of the clock: greyed without a time, animated between the batches of a running simulation."""
+    if not h["has_time"]:
+        return "sim-clock idle"
+    return "sim-clock moving" if h["animate"] else "sim-clock"
+
+
 def clamp_prob(value):
     """Slider value -> valid PURCHASE_PROB percent: within [PROB_MIN, PROB_MAX], on the step grid."""
     value = PROB_MIN + int(round((float(value) - PROB_MIN) / PROB_STEP)) * PROB_STEP

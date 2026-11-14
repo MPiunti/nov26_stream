@@ -162,14 +162,40 @@ def counters_tab():
     ]
 
 
+def hand_style(angle):
+    return {"transform": f"rotate({angle}deg)"}
+
+
+def headline_panel(h):
+    """Simulation id, start time and simulated time (analog clock and GMT timestamp); kept current by refresh().
+
+    Built with the current values, so a page opened during a simulation shows the hands in place at once."""
+    marks = [html.Div(className="mark quarter" if i % 3 == 0 else "mark", style={"transform": f"rotate({i * 30}deg)"})
+             for i in range(12)]
+    clock = html.Div(marks + [
+        html.Div(id="hand-hour", className="hand hand-hour", style=hand_style(h["hour_angle"])),
+        html.Div(id="hand-minute", className="hand hand-minute", style=hand_style(h["minute_angle"])),
+        html.Div(className="pin")], id="sim-clock", className=sim.clock_class({**h, "animate": False}))
+    return dbc.Card(dbc.CardBody(dbc.Row([
+        dbc.Col([clock, html.Div("Simulated time", className="label"),
+                 html.Div(h["simulated"], id="headline-simulated", className="value")], xs=12, md=4,
+                className="text-center"),
+        dbc.Col([html.Div("Simulation id", className="label"),
+                 html.Div(h["simulation_id"], id="headline-simulation-id", className="value mono")], xs=12, md=4,
+                className="text-center"),
+        dbc.Col([html.Div("Started at", className="label"),
+                 html.Div(h["started"], id="headline-started", className="value")], xs=12, md=4,
+                className="text-center"),
+    ], className="g-3 align-items-center")), className="sim-headline mb-3 shadow-sm")
+
+
 def serve_layout():
     # Built per page load, so the sliders show the running simulation's values.
-    n_avg = simulation.snapshot()["n_avg"]
+    snapshot = simulation.snapshot()
+    n_avg = snapshot["n_avg"]
     return dbc.Container([
-        html.Div([
-            html.H3("People stream simulator", className="mb-0 me-3"),
-            html.H4(id="headline-time", className="mb-0 text-primary"),
-        ], className="d-flex align-items-baseline flex-wrap mt-3 mb-2"),
+        html.H3("People stream simulator", className="mt-3 mb-2"),
+        headline_panel(sim.headline(snapshot)),
         html.P("Streams simulated people-counter events into the pipeline's source table. "
                f"24 simulated hours take {CFG.real_seconds_per_sim_day} seconds; stores are open "
                f"{CFG.opening_hour:02d}:00-{CFG.closing_hour:02d}:00 local time, and each person stays inside "
@@ -332,7 +358,9 @@ def _fmt_time(iso):
               Output({"type": "region-stats", "region": sim.REGIONS[2]}, "children"),
               Output("start", "disabled"),
               Output("stop", "disabled"),
-              Output("headline-time", "children"),
+              Output("headline-simulation-id", "children"), Output("headline-started", "children"),
+              Output("headline-simulated", "children"),
+              Output("hand-hour", "style"), Output("hand-minute", "style"), Output("sim-clock", "className"),
               Output("browser-title", "data"),
               Input("tick", "n_intervals"))
 def refresh(_):
@@ -359,7 +387,10 @@ def refresh(_):
     regions = [html.Div([html.Div(f"{s['open_stores'][r]} / {s['stores'][r]} stores open"),
                          html.Div(f"{s['entries'][r]:,} visitors so far")]) for r in sim.REGIONS]
     active = s["state"] in ACTIVE_STATES
-    return (state, stats, *regions, active, not active, sim.headline_time(s),
+    h = sim.headline(s)
+    return (state, stats, *regions, active, not active,
+            h["simulation_id"], h["started"], h["simulated"],
+            hand_style(h["hour_angle"]), hand_style(h["minute_angle"]), sim.clock_class(h),
             sim.browser_title(s, APP_TITLE))
 
 

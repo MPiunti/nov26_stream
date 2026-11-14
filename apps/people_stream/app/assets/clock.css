@@ -1,0 +1,22 @@
+/* People-stream simulator: the headline panel and its analog clock of the simulated time.
+   Dash serves every file in assets/ automatically. See doc/people_stream.md, "Screen". */
+
+.sim-headline .label { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: #6c757d; }
+.sim-headline .value { font-size: 1.15rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.sim-headline .mono { font-family: Consolas, "SFMono-Regular", Menlo, monospace; }
+
+.sim-clock { position: relative; width: 92px; height: 92px; margin: 0 auto 6px auto;
+             border: 3px solid #343a40; border-radius: 50%; background: #fff; }
+.sim-clock .mark { position: absolute; left: 50%; top: 0; width: 2px; height: 50%; margin-left: -1px;
+                   transform-origin: bottom center; }
+.sim-clock .mark::before { content: ""; display: block; width: 2px; height: 7px; background: #adb5bd; }
+.sim-clock .mark.quarter::before { height: 10px; background: #343a40; }
+/* The hands turn from the centre; the angles only ever grow, so the transition always runs forwards. */
+.sim-clock .hand { position: absolute; left: 50%; bottom: 50%; transform-origin: bottom center; border-radius: 2px; }
+/* Animated only between the batches of a running simulation (class set by the app). */
+.sim-clock.moving .hand { transition: transform 0.9s cubic-bezier(0.4, 1.6, 0.6, 1); }
+.sim-clock .hand-hour { width: 4px; height: 24px; margin-left: -2px; background: #212529; }
+.sim-clock .hand-minute { width: 2px; height: 36px; margin-left: -1px; background: #0d6efd; }
+.sim-clock .pin { position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px;
+                  border-radius: 50%; background: #212529; }
+.sim-clock.idle { opacity: 0.45; }

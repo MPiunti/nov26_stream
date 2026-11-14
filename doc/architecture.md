@@ -1,0 +1,122 @@
+# Solution overview: how it works
+
+The whole solution on one page: what it does, its three independent parts, how they are decoupled, and how fast data moves through it. Written as the starting point for presentations; the detailed pages are linked from each section and listed in [`agents.md`](../agents.md).
+
+## 1. In short
+
+A retail group with **200 stores** in Europe, the Americas and Asia wants to see footfall and sales **while they happen**. This solution shows how, end to end, on Databricks:
+
+- A **simulation engine** plays the stores' day: people entering and leaving, and what they buy.
+- A **streaming data pipeline** checks every event and sale and stores the valid ones, seconds after they happen.
+- A **BI engine**, the sales dashboard, shows value, quantity, average price and people in, live, with drill-down by geography and product.
+
+The three parts are **decoupled**: each can be started, stopped, redeployed or replaced without touching the others. All data is synthetic.
+
+## 2. The picture
+
+```
+ SIMULATION ENGINE                 DATA PIPELINE                          BI ENGINE
+ people-stream app                 continuous job + pipeline              sales dashboard app
+
+ START ─▶ people events ──▶ source ──▶ bronze ──▶ silver ──┐
+          sales         ──▶ tables     (raw)      (valid)   ├─▶ current-simulation ──▶ KPI cards
+                            append-               quarantine│     views                 trend lines
+                            only                  (invalid) │   (latest simulation)     drill-down bars
+                                                            │
+ stores, clients, products (dimensions) ────────────────────┴─────────────────────────▶ names, filters
+
+ writes: source tables only        reads sources, writes bronze/silver    reads: views and dimensions only
+```
+
+| Part | What it is | Its job | Detail |
+|---|---|---|---|
+| **Simulation engine** | The people-stream app | Generates people-counter events for 200 stores and the sales they lead to, and writes them to two source tables, as an event broker would deliver them | [`people_stream.md`](people_stream.md), [`sales.md`](sales.md) |
+| **Data pipeline** | A streaming pipeline kept running by a continuous job | Bronze keeps every message as received; silver keeps the parsed, typed, valid ones; quarantine keeps the invalid ones with the reason | [`readme.md`](../readme.md), [`warehouse.md`](warehouse.md) |
+| **BI engine** | The sales dashboard app | Self-service sales and footfall analysis, refreshed every 5 seconds, with filters and drill-down | [`sales_dashboard.md`](sales_dashboard.md) |
+
+## 3. How the engines are decoupled
+
+The simulation engine and the BI engine never talk to each other, and neither talks to the pipeline. They meet only at **data contracts**: tables and views with an agreed shape.
+
+| Contract | Between | What is agreed |
+|---|---|---|
+| **Source tables** (`simulated_event_source`, `simulated_sales_source`) | Simulation engine → pipeline | Append-only messages in an event-broker envelope (topic, partition, offset, timestamp) with a JSON payload. The pipeline doesn't know or care who writes them |
+| **Simulation id** (`simulation_id`) | Simulation engine → everything downstream | Every START gets a new id, its UTC start time, written into every event and sale. A later START always has a higher id |
+| **Current-simulation views** (`current_people_counter_events`, `current_sales_transactions`) | Pipeline → BI engine | The valid events and sales of the latest simulation only. The dashboard reads nothing else, apart from the dimensions |
+| **Dimensions** (`dim_store`, `dim_client`, `dim_product`) | Master data → all three | Stores, clients and products with their natural business keys |
+
+What this decoupling means in practice:
+
+| Property | How it shows |
+|---|---|
+| **No calls between parts** | The simulator never starts the pipeline or notifies the dashboard. Pressing START only writes data; everything downstream reacts to the data |
+| **Least privilege, by construction** | The simulator may write only the two source tables. The dashboard has `SELECT` on the two views and two dimensions, and nothing else: not even the silver tables. Neither app has any permission on the other's objects |
+| **Independent deployment** | Three separate bundles: pipeline, simulator, dashboard. Deploying or stopping one never changes the others |
+| **Replaceable ends** | The simulator can be replaced by a real event broker (Azure Event Hubs is the intended one) delivering the same messages; the dashboard by any BI tool that can read the views. The pipeline in the middle doesn't change |
+| **Independent failure** | If the dashboard is down, data keeps flowing. If the simulator stops, the dashboard keeps showing the last simulation. If the pipeline is paused, events wait in the source tables and nothing is lost |
+
+## 4. What happens when START is pressed
+
+1. The simulator creates a new simulation id, for example `20261114T201229280`, and empties its two source tables.
+2. Every 5 seconds it writes a batch: 30 simulated minutes of people events for the stores open at that simulated time, and the sales made by the people leaving.
+3. The pipeline, already running, picks the new rows up in its next micro-batch. It skips the deletes, validates each row and appends the valid ones to silver, with their simulation id.
+4. The views now see a higher simulation id and show only the new simulation.
+5. The dashboard's next refresh shows the new simulation: the numbers restart from zero and grow every few seconds.
+
+Nothing is paused, refreshed or restarted. Earlier simulations stay in silver for analysis and are removed by an occasional housekeeping refresh ([`readme.md`](../readme.md), "Running the pipeline").
+
+## 5. How fast
+
+Measured on 14 November 2026, on the Databricks Free Edition workspace:
+
+| Stage | Measured |
+|---|---|
+| Simulator writes a batch | Every 5 seconds (one batch = 30 simulated minutes; a simulated day = 240 seconds) |
+| Source → bronze | Bronze 3 to 7 seconds behind the clock |
+| Silver commits | Every 4 to 6 seconds |
+| Dashboard queries | 1.6 to 2.0 seconds each; about 3 seconds for a whole refresh of five queries in parallel |
+| Dashboard refresh | Every 5 seconds, one refresh at a time |
+| New simulation visible in the views | Within a minute of START right after a deployment, most of it the pipeline starting up; with the pipeline already running, a few seconds |
+
+The pipeline's micro-batch interval is set to 2 seconds; in practice each micro-batch takes 4 to 6 seconds. That processing time, not the setting, is today's limit to going faster.
+
+## 6. The business model in numbers
+
+| | |
+|---|---|
+| Stores | 200 in 13 countries and 3 macro regions (Europe 100, Americas 60, Asia 40); 2 flagships, Milan and New York ([`dataset.md`](dataset.md)) |
+| Opening hours | 10:00 to 20:00 local time, so some store is open at every hour of the day worldwide |
+| Clients | 100,000; 70% of buyers are local, 30% visitors from another country, inverted at the flagships ([`client.md`](client.md)) |
+| Products | 120 in six merchandise categories, at luxury price points ([`product.md`](product.md)) |
+| Average transaction | About 1,012 EUR; every transaction is one item, always in euro ([`sales.md`](sales.md) §11) |
+| Volumes | About 600,000 visitors and 120,000 transactions per simulated day, about 121 million EUR |
+| Time | Sales and events keep the store's local time and, for one worldwide timeline, GMT |
+
+## 7. Quality and control
+
+| Topic | How it is handled |
+|---|---|
+| **Data quality** | Every event and sale is validated (8 rules for events, 10 for sales). Invalid rows are not lost: they go to a quarantine table with the reasons |
+| **Keys** | Natural business keys everywhere; silver declares its primary and foreign keys to the dimensions |
+| **Access** | Each app runs as its own service principal with only the permissions listed in §3 |
+| **Reproducible deployment** | Everything is code in one Git repository: pipeline, apps, tables, views and documentation. Three bundles deploy it |
+| **Tests** | Automated tests check that the code, the bundles, the SQL scripts and these documents agree, before anything is deployed |
+| **Synthetic data** | No real customer, store or company data is used |
+
+## 8. Operating it
+
+| When | What |
+|---|---|
+| Start of a session | Resume the continuous job, once |
+| During the session | Press START in the simulator as often as needed; watch the dashboard |
+| End of a session | Pause the job and stop the apps, so no compute is running or billed |
+| Occasionally | A full refresh of the pipeline, with the job paused, to drop earlier simulations |
+
+## 9. Limits today and natural next steps
+
+| Limit today | Next step |
+|---|---|
+| The source is a simulator writing to tables | Connect Azure Event Hubs; the source tables already have its message envelope |
+| Micro-batches take 4 to 6 seconds | Tune the pipeline's processing per batch, or accept this latency: the simulator itself writes every 5 seconds |
+| The dashboard shows only the current simulation | Add a simulation selector, to compare runs: silver already keeps them |
+| Free Edition workspace, one SQL warehouse shared by both apps | A paid workspace separates the simulator's writes from the dashboard's queries |
