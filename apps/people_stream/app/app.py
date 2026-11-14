@@ -178,8 +178,9 @@ def serve_layout():
                f"the flagships {', '.join(CFG.flagship_ids)} get {CFG.flagship_traffic_pct}% traffic and "
                f"{CFG.flagship_local_share}% local buyers. Each run lasts at most "
                f"{CFG.max_run_sim_hours} simulated hours ({CFG.max_run_real_seconds:g} seconds); "
-               "START always begins a new run and first empties both source tables (people events and sales); "
-               "afterwards run the pipeline with a full refresh of all tables.",
+               "START always begins a new simulation, with a new simulation id, and first empties both source "
+               "tables (people events and sales); the running pipeline and the sales dashboard follow the new "
+               "simulation by themselves.",
                className="text-muted"),
         dbc.Card(dbc.CardBody(dbc.Row([
             dbc.Col([
@@ -340,7 +341,7 @@ def refresh(_):
     if s["error"]:
         state.append(html.Span(s["error"], className="text-danger small"))
     elif s.get("sources_cleared"):
-        state.append(html.Span("Source tables emptied at START: run the pipeline with Full refresh all.",
+        state.append(html.Span("New simulation: the running pipeline and the sales dashboard follow it.",
                                className="text-muted small"))
     stats = dbc.Row([
         dbc.Col([html.Div("Simulated time", className="small text-muted"), html.Div(_fmt_time(s["sim_utc"]))]),
@@ -353,7 +354,7 @@ def refresh(_):
                  html.Div(f"{s['pending_batches']:,} batches")]),
         dbc.Col([html.Div("Batches", className="small text-muted"),
                  html.Div(f"{s['batches']:,} (last {s['last_batch_rows']} rows)")]),
-        dbc.Col([html.Div("Run id", className="small text-muted"), html.Div(s["run_id"] or "-")]),
+        dbc.Col([html.Div("Simulation id", className="small text-muted"), html.Div(s["run_id"] or "-")]),
     ])
     regions = [html.Div([html.Div(f"{s['open_stores'][r]} / {s['stores'][r]} stores open"),
                          html.Div(f"{s['entries'][r]:,} visitors so far")]) for r in sim.REGIONS]

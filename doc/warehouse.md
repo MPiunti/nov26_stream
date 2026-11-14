@@ -39,6 +39,9 @@ The pipeline and the apps read the dimensions from `test02_warehouse`; the pipel
 | `bronze_sales_transactions` | `test02_streaming` | One sales message | as the source | pipeline | `sales.md` §10 |
 | `silver_sales_transactions` | `test02_streaming` | One valid transaction | `transaction_id` | pipeline | `sales.md` §10 |
 | `quarantine_sales_transactions` | `test02_streaming` | One invalid transaction | none | pipeline | `sales.md` §10 |
+| `current_simulation` (view) | `test02_streaming` | One row: the latest `simulation_id` | | view | §6 |
+| `current_people_counter_events` (view) | `test02_streaming` | One valid event of the current simulation | `event_id` | view | §6 |
+| `current_sales_transactions` (view) | `test02_streaming` | One valid transaction of the current simulation | `transaction_id` | view | §6 |
 
 ## 3. Natural keys only
 
@@ -67,6 +70,7 @@ All scripts are in `src/sql/`, run by hand on the SQL warehouse, in number order
 | People source | `04` (creates the `test02_streaming` schema and the source), optionally `05`, check `06` | Empty source, or the 8 hand-written events |
 | Clients and products | `08`, `09`, `10`, `11`, check `13` | 100,000 clients, 120 products |
 | Sales source | `12` | Empty sales source |
+| Current-simulation views | `15`, after the pipeline has created the silver tables | Three views (§6) |
 
 ## 5. Moving the dimensions out of `test02_streaming`
 
@@ -76,3 +80,20 @@ The dimensions used to live in `test02_streaming`. To move to the layout above i
 2. Redeploy the pipeline bundle and the app bundle; both now read `test02_warehouse`.
 3. Run the pipeline with **Full refresh all**: silver's foreign key now points to `test02_warehouse.dim_store`.
 4. Run `14_drop_old_streaming_dimensions.sql` once: it drops the old `dim_store`, `dim_client` and `dim_product` from `test02_streaming`.
+
+## 6. Simulations and the current-simulation views
+
+Every START of the people-stream app begins a new **simulation**. Its `simulation_id` is the real UTC start time to the millisecond, e.g. `20261114T193627123`: sortable, so the latest simulation is `MAX(simulation_id)`. The app writes it into every event and transaction (`people_stream.md` §6, `sales.md` §5), and the pipeline carries it into the silver and quarantine tables as the column `simulation_id`. Rows that don't come from the app (the 8 hand-written events of `05_…`) have no simulation id.
+
+The pipeline is never stopped or refreshed at a START (`readme.md`, "Running the pipeline"), so silver holds **every** simulation. Three plain views, created once by `src/sql/15_create_current_simulation_views.sql`, keep only the latest:
+
+| View | Definition |
+|---|---|
+| `current_simulation` | `SELECT MAX(simulation_id) FROM silver_people_counter_events`: the one definition of "current". People events always arrive before the first sale, so everything below switches to a new simulation at the same moment |
+| `current_people_counter_events` | `silver_people_counter_events` where `simulation_id` is the current one |
+| `current_sales_transactions` | `silver_sales_transactions` where `simulation_id` is the current one |
+
+- **Plain views, not materialized:** they are evaluated at query time, so they add no delay to silver. A new simulation is visible as soon as its first people events reach silver.
+- **Fast filter:** both silver tables are clustered by `simulation_id` (`cluster_by` in the pipeline), so the filter and the `MAX` don't scan earlier simulations.
+- **Readers:** the sales dashboard reads only the two `current_…` views and the dimensions ([`sales_dashboard.md`](sales_dashboard.md)). Anything that should follow the running simulation reads the views; the silver tables remain for looking at earlier simulations.
+- **Housekeeping:** earlier simulations stay in the tables until a full refresh (`readme.md`, "Running the pipeline").

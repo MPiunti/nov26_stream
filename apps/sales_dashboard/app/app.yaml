@@ -6,9 +6,9 @@ env:
     valueFrom: sql-warehouse
   # Keep these the same as the table resources in resources/sales_dashboard.app.yml.
   - name: SALES_TABLE
-    value: workspace.test02_streaming.silver_sales_transactions
+    value: workspace.test02_streaming.current_sales_transactions
   - name: PEOPLE_TABLE
-    value: workspace.test02_streaming.silver_people_counter_events
+    value: workspace.test02_streaming.current_people_counter_events
   - name: STORE_TABLE
     value: workspace.test02_warehouse.dim_store
   - name: PRODUCT_TABLE

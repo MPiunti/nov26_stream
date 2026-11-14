@@ -34,7 +34,8 @@ SALES_SCHEMA = StructType([
     StructField("unit_price", DecimalType(12, 2), True),
     StructField("amount", DecimalType(12, 2), True),
     StructField("currency", StringType(), True),
-    StructField("transaction_timestamp", StringType(), True)
+    StructField("transaction_timestamp", StringType(), True),
+    StructField("simulation_id", StringType(), True)
 ])
 
 
@@ -134,6 +135,9 @@ SILVER_SALES_SCHEMA = """
     transaction_timestamp_utc TIMESTAMP_NTZ
         COMMENT 'The same moment in UTC (GMT): transaction_timestamp converted from store_timezone_id',
 
+    simulation_id STRING
+        COMMENT 'Simulation (one START of the people-stream app) that produced the sale; sortable, latest = MAX',
+
     CONSTRAINT pk_silver_sales_transactions
         PRIMARY KEY (transaction_id),
 
@@ -211,6 +215,9 @@ QUARANTINE_SALES_SCHEMA = """
     transaction_timestamp_utc TIMESTAMP_NTZ
         COMMENT 'The same moment in UTC (GMT), when the timestamp and the store are valid',
 
+    simulation_id STRING
+        COMMENT 'Simulation that produced the sale, when available',
+
     rejection_reason STRING
         COMMENT 'One or more validation errors separated by a pipe character',
 
@@ -250,6 +257,7 @@ def validated_sales():
                 F.col("_tx.amount").alias("amount"),
                 F.upper(F.trim(F.col("_tx.currency"))).alias("currency"),
                 F.col("_tx.transaction_timestamp").alias("transaction_timestamp_raw"),
+                F.trim(F.col("_tx.simulation_id")).alias("simulation_id"),
                 F.col("_tx").isNull().alias("_invalid_json")
             )
             .withColumn(
@@ -347,6 +355,8 @@ def validated_sales():
     name="silver_sales_transactions",
     comment="Validated and typed sales transactions; read by the sales dashboard app",
     schema=SILVER_SALES_SCHEMA,
+    # The current-simulation views filter on simulation_id: clustering keeps that filter fast.
+    cluster_by=["simulation_id"],
     table_properties={
         "quality": "silver",
         "domain": "retail",
@@ -380,7 +390,8 @@ def silver_sales_transactions():
                 "transaction_timestamp_raw",
                 "store_timezone_id",
                 "transaction_timestamp",
-                "transaction_timestamp_utc"
+                "transaction_timestamp_utc",
+                "simulation_id"
             )
     )
 
@@ -428,6 +439,7 @@ def quarantine_sales_transactions():
                 "store_timezone_id",
                 "transaction_timestamp",
                 "transaction_timestamp_utc",
+                "simulation_id",
                 "rejection_reason",
                 "record_status",
                 "quarantine_timestamp"

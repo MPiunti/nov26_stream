@@ -22,7 +22,8 @@ EVENT_SCHEMA = StructType([
     StructField("sensor_id", StringType(), True),
     StructField("event_timestamp", StringType(), True),
     StructField("event_type", StringType(), True),
-    StructField("people_count", IntegerType(), True)
+    StructField("people_count", IntegerType(), True),
+    StructField("simulation_id", StringType(), True)
 ])
 
 
@@ -72,6 +73,9 @@ SILVER_SCHEMA = """
 
     event_timestamp TIMESTAMP_NTZ
         COMMENT 'Parsed sensor event timestamp without timezone conversion',
+
+    simulation_id STRING
+        COMMENT 'Simulation (one START of the people-stream app) that produced the event; sortable, latest = MAX',
 
     CONSTRAINT pk_silver_people_counter_events
         PRIMARY KEY (event_id),
@@ -129,6 +133,9 @@ QUARANTINE_SCHEMA = """
     event_timestamp TIMESTAMP_NTZ
         COMMENT 'Parsed sensor event timestamp, when valid',
 
+    simulation_id STRING
+        COMMENT 'Simulation (one START of the people-stream app) that produced the event; sortable, latest = MAX',
+
     rejection_reason STRING
         COMMENT 'One or more validation errors separated by a pipe character',
 
@@ -170,6 +177,7 @@ def validated_events():
                     F.trim(F.col("_event.event_type"))
                 ).alias("event_type"),
                 F.col("_event.people_count").alias("people_count"),
+                F.trim(F.col("_event.simulation_id")).alias("simulation_id"),
                 F.col("_event").isNull().alias("_invalid_json")
             )
             .withColumn(
@@ -267,6 +275,8 @@ def validated_events():
     name="silver_people_counter_events",
     comment="Validated and typed retail people counter events",
     schema=SILVER_SCHEMA,
+    # The current-simulation views filter on simulation_id: clustering keeps that filter and its MAX fast.
+    cluster_by=["simulation_id"],
     table_properties={
         "quality": "silver",
         "domain": "retail",
@@ -294,7 +304,8 @@ def silver_people_counter_events():
                 "event_type",
                 "people_count",
                 "store_timezone_id",
-                "event_timestamp"
+                "event_timestamp",
+                "simulation_id"
             )
     )
 
@@ -336,6 +347,7 @@ def quarantine_people_counter_events():
                 "people_count",
                 "store_timezone_id",
                 "event_timestamp",
+                "simulation_id",
                 "rejection_reason",
                 "record_status",
                 "quarantine_timestamp"

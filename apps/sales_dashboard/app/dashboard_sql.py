@@ -9,8 +9,9 @@ import re
 from dataclasses import dataclass
 
 DEFAULT_TABLES = {
-    "SALES_TABLE": "workspace.test02_streaming.silver_sales_transactions",
-    "PEOPLE_TABLE": "workspace.test02_streaming.silver_people_counter_events",
+    # Views on the silver tables that keep only the current simulation (src/sql/15_...).
+    "SALES_TABLE": "workspace.test02_streaming.current_sales_transactions",
+    "PEOPLE_TABLE": "workspace.test02_streaming.current_people_counter_events",
     "STORE_TABLE": "workspace.test02_warehouse.dim_store",
     "PRODUCT_TABLE": "workspace.test02_warehouse.dim_product",
 }

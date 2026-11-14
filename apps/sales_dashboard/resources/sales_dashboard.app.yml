@@ -6,7 +6,8 @@ resources:
       # The start command and environment variables are in app/app.yaml.
       source_code_path: ../app
       # Granted to the app's service principal on deploy: SELECT only, nothing is written.
-      # The silver tables must already exist: deploy and run the pipeline (with 03_sales.py) first.
+      # It reads silver through the current-simulation views, which must already exist:
+      # deploy and run the pipeline, then run src/sql/15_create_current_simulation_views.sql.
       resources:
         - name: sql-warehouse
           sql_warehouse:
@@ -14,12 +15,12 @@ resources:
             permission: CAN_USE
         - name: sales-table
           uc_securable:
-            securable_full_name: ${var.catalog}.${var.schema}.silver_sales_transactions
+            securable_full_name: ${var.catalog}.${var.schema}.current_sales_transactions
             securable_type: TABLE
             permission: SELECT
         - name: people-table
           uc_securable:
-            securable_full_name: ${var.catalog}.${var.schema}.silver_people_counter_events
+            securable_full_name: ${var.catalog}.${var.schema}.current_people_counter_events
             securable_type: TABLE
             permission: SELECT
         - name: store-table

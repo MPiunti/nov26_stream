@@ -52,14 +52,14 @@ class QueryTests(unittest.TestCase):
                 self.assertTrue(sql.lstrip().upper().startswith("SELECT"), sql)
                 self.assertNotRegex(sql, WRITE_WORDS)
 
-    def test_reads_only_the_silver_tables_and_the_dimensions(self):
+    def test_reads_only_the_current_simulation_views_and_the_dimensions(self):
         tables = set()
         for sql, _ in _all_queries(self.FULL):
             tables.update(re.findall(r"\b(?:FROM|JOIN)\s+(\S+)", sql))
         self.assertEqual(tables, set(q.DEFAULT_TABLES.values()))
         self.assertEqual(q.DEFAULT_TABLES, {
-            "SALES_TABLE": "workspace.test02_streaming.silver_sales_transactions",
-            "PEOPLE_TABLE": "workspace.test02_streaming.silver_people_counter_events",
+            "SALES_TABLE": "workspace.test02_streaming.current_sales_transactions",
+            "PEOPLE_TABLE": "workspace.test02_streaming.current_people_counter_events",
             "STORE_TABLE": "workspace.test02_warehouse.dim_store",
             "PRODUCT_TABLE": "workspace.test02_warehouse.dim_product"})
 
@@ -347,7 +347,7 @@ class BundleTests(unittest.TestCase):
         grants = re.findall(r"securable_full_name: \$\{var\.catalog\}\.\$\{var\.(\w+)\}\.(\w+)\s*\n\s*"
                             r"securable_type: TABLE\s*\n\s*permission: (\w+)", res)
         self.assertEqual(sorted(grants), [
-            ("schema", "silver_people_counter_events", "SELECT"), ("schema", "silver_sales_transactions", "SELECT"),
+            ("schema", "current_people_counter_events", "SELECT"), ("schema", "current_sales_transactions", "SELECT"),
             ("warehouse_schema", "dim_product", "SELECT"), ("warehouse_schema", "dim_store", "SELECT")])
         self.assertNotIn("MODIFY", res)
         self.assertIn("permission: CAN_USE", res)
@@ -375,7 +375,7 @@ class DocTests(unittest.TestCase):
     def test_readme_lists_app_files(self):
         readme = read_text("readme.md")
         for root, dirs, files in os.walk(path(*APP)):
-            dirs[:] = [d for d in dirs if d != "__pycache__"]
+            dirs[:] = [d for d in dirs if d not in ("__pycache__", ".databricks")]
             for f in files:
                 self.assertIn(f, readme, f"{os.path.join(root, f)} isn't in readme.md")
 
@@ -384,7 +384,7 @@ class DocTests(unittest.TestCase):
         for text in ("`silver_sales_transactions`", "`silver_people_counter_events`", "every 5 seconds",
                      "Area → Country → Store", "Merch. category → Product", "`update_title=None`",
                      "`sales-bi-<user>`", "ITEMS PER VISITOR", "one line per macro region", "`transaction_timestamp_utc`",
-                     "5% of the width on phones"):
+                     "5% of the width on phones", "`current_sales_transactions`", "Always the current simulation"):
             self.assertIn(text, doc)
 
 

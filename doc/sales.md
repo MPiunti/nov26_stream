@@ -73,7 +73,8 @@ Entries never trigger sales; only people leaving buy. Stores closed or not yet r
 Payload (`raw_event`), one JSON object per transaction:
 
 ```json
-{"transaction_id":"tx-3f9a1c2b-0-0000000042","exit_event_id":"sim-3f9a1c2b-0-0000001234",
+{"transaction_id":"tx-20261114T193627123-0-0000000042","simulation_id":"20261114T193627123",
+ "exit_event_id":"sim-20261114T193627123-0-0000001234",
  "store_id":"IT-MI-001","client_id":"CL-IT-0004711","product_id":"SH-0007","category":"SHOES",
  "quantity":1,"unit_price":725.0,"amount":725.0,"currency":"EUR",
  "transaction_timestamp":"2026-11-14T15:31:12.408"}
@@ -81,7 +82,8 @@ Payload (`raw_event`), one JSON object per transaction:
 
 | Field | Rule |
 |---|---|
-| `transaction_id` | `tx-<run id>-<partition>-<offset, 10 digits>`; unique across runs. The natural key of a transaction |
+| `transaction_id` | `tx-<simulation id>-<partition>-<offset, 10 digits>`; unique across simulations. The natural key of a transaction |
+| `simulation_id` | The simulation's id, the same as in its people events (`people_stream.md` §6): sortable, the latest simulation is the highest |
 | `exit_event_id` | `event_id` of the `EXIT` that triggered it; several transactions can share one exit |
 | `store_id` | The exit's store → `dim_store.store_id` |
 | `client_id` | → `dim_client.client_id`; from the store's country for 70% of transactions (30% at flagships), from another country otherwise |
@@ -157,7 +159,7 @@ A transaction goes to silver if it passes every rule, and to quarantine otherwis
 | `UNKNOWN_PRODUCT` | `product_id` is missing or isn't in `dim_product` |
 | `CATEGORY_MISMATCH` | `category` (after trimming and upper-casing) isn't the product's category in `dim_product` |
 
-The pre-flight check (`00_check_tables.py`) also requires `simulated_sales_source`, and a non-empty `dim_client` and `dim_product`: run `src/sql/08_…` to `12_…` before the pipeline. After an app START, the same full refresh as for the people events rebuilds the sales tables (`readme.md`, "Running the pipeline"). A new silver column, such as `transaction_timestamp_utc`, also needs that full refresh before it appears.
+The pre-flight check (`00_check_tables.py`) also requires `simulated_sales_source`, and a non-empty `dim_client` and `dim_product`: run `src/sql/08_…` to `12_…` before the pipeline. Silver and quarantine carry the transaction's `simulation_id`, and silver is clustered by it. The pipeline keeps running through an app START, so silver holds every simulation; the view `current_sales_transactions` keeps only the latest (`warehouse.md` §6). A new silver column, such as `transaction_timestamp_utc` or `simulation_id`, needs one full refresh before it appears.
 
 ## 11. Purchase model: products, categories and price points
 

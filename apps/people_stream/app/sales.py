@@ -111,6 +111,7 @@ class SalesGenerator:
         self.next_offset[partition] += 1
         payload = {
             "transaction_id": f"tx-{self.run_id}-{partition}-{offset:010d}",
+            "simulation_id": self.run_id,
             "exit_event_id": event["event_id"],
             "store_id": event["store_id"],
             "client_id": client_id,

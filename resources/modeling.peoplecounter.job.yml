@@ -3,8 +3,9 @@ resources:
     retail_people_counter_continuous:
       name: retail-simulator
       description: >-
-        Keeps the people-counter pipeline running, so it picks up every event the people-stream app writes. Resume it after the full refresh that follows an app START; pause it before the next full refresh. See readme.md, "Running the pipeline".
-      # Continuous: as soon as a pipeline update ends, the job starts the next one.
+        Keeps the people-counter pipeline running, so it picks up every event the people-stream app writes. Resume it for a session and pause it when done; it keeps running through every app START. See readme.md, "Running the pipeline".
+      # Continuous: the job keeps a pipeline update running (a micro-batch every 2 seconds per table,
+      # pipelines.trigger.interval in the pipeline's settings), and starts a new one if it ends or fails.
       # Created paused (development mode pauses it on every deploy anyway): Resume it in the job's page.
       continuous:
         pause_status: PAUSED
@@ -13,4 +14,4 @@ resources:
           pipeline_task:
             pipeline_id: ${resources.pipelines.retail_people_counter_bronze.id}
             # No full_refresh here: it would empty and rebuild the tables on every update.
-            # The full refresh after an app START is a separate, manual pipeline run.
+            # A full refresh is housekeeping: a separate, manual pipeline run, with this job paused.

@@ -226,6 +226,36 @@ class PipelineCodeTests(unittest.TestCase):
             self.assertRegex(consts[schema], r"transaction_timestamp TIMESTAMP_NTZ")
             self.assertRegex(consts[schema], r"transaction_timestamp_utc TIMESTAMP_NTZ")
 
+    def test_silver_carries_the_simulation_id(self):
+        """Both silver tables (and quarantines) have simulation_id; silver is clustered by it for the views."""
+        for f, schemas, silver in (("src/pipelines/02_silver.py", ("SILVER_SCHEMA", "QUARANTINE_SCHEMA"),
+                                    "silver_people_counter_events"),
+                                   (SALES_FILE, ("SILVER_SALES_SCHEMA", "QUARANTINE_SALES_SCHEMA"),
+                                    "silver_sales_transactions")):
+            tree = parse(f)
+            consts = constants(tree)
+            for schema in schemas:
+                self.assertRegex(consts[schema], r"simulation_id STRING", f"{f}: {schema}")
+            self.assertIn('StructField("simulation_id", StringType(), True)', read_text(f))
+            self.assertEqual(ast.literal_eval(pipeline_tables(tree)[silver]["cluster_by"]), ["simulation_id"])
+
+    def test_current_simulation_views(self):
+        """Plain views on silver; one definition of the current simulation, used by both."""
+        sql = re.sub(r"--[^\n]*", "", read_text("src", "sql", "15_create_current_simulation_views.sql"))
+        schema = "workspace.test02_streaming"
+        self.assertEqual(re.findall(r"CREATE OR REPLACE VIEW (\S+)", sql),
+                         [f"{schema}.current_simulation", f"{schema}.current_people_counter_events",
+                          f"{schema}.current_sales_transactions"])
+        self.assertNotIn("MATERIALIZED", sql.upper(), "a materialized view would lag behind silver")
+        self.assertRegex(sql, rf"SELECT MAX\(simulation_id\) AS simulation_id\s+FROM {schema}\.silver_people_counter_events")
+        current = f"simulation_id = (SELECT simulation_id FROM {schema}.current_simulation)"
+        self.assertEqual(sql.count(current), 2)
+        self.assertIn(f"FROM {schema}.silver_people_counter_events e\nWHERE e.{current}", sql)
+        self.assertIn(f"FROM {schema}.silver_sales_transactions s\nWHERE s.{current}", sql)
+
+    def test_micro_batches_every_2_seconds(self):
+        self.assertRegex(read_text(*PIPELINE_YML), r'configuration:\n(\s+#.*\n)*\s+pipelines\.trigger\.interval: "2 seconds"')
+
     def test_sales_tables(self):
         self.assertEqual(set(pipeline_tables(parse(SALES_FILE))),
                          {"bronze_sales_transactions", "silver_sales_transactions", "quarantine_sales_transactions"})

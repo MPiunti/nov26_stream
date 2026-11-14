@@ -343,7 +343,7 @@ class SalesAppAndDocTests(unittest.TestCase):
 
     def test_sales_doc_matches_the_code(self):
         doc = read_text("doc", "sales.md")
-        for text in ("`retail-sales-app`", "tx-<run id>-<partition>-<offset, 10 digits>", "chunks of at most 10,000",
+        for text in ("`retail-sales-app`", "tx-<simulation id>-<partition>-<offset, 10 digits>", "chunks of at most 10,000",
                      "`store_id` → `dim_store`, `client_id` → `dim_client`, `product_id` → `dim_product`"):
             self.assertIn(text, doc)
         if sim is not None:

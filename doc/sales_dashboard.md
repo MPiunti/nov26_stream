@@ -9,7 +9,7 @@ The data it reads is described in [`sales.md`](sales.md) (transactions and the s
 | | |
 |---|---|
 | **What it does** | Shows sales value (EUR), items sold, average price and people in, on one **GMT** timeline, with filters and drill-down; refreshes **every 5 seconds**, so the numbers grow while the people-stream app and the continuous pipeline run |
-| **What it reads** | `silver_sales_transactions` and `silver_people_counter_events` (`test02_streaming`), `dim_store` and `dim_product` (`test02_warehouse`). `SELECT` only |
+| **What it reads** | The current-simulation views `current_sales_transactions` and `current_people_counter_events` (`test02_streaming`): the silver tables `silver_sales_transactions` and `silver_people_counter_events`, filtered to the latest simulation ([`warehouse.md`](warehouse.md) §6); and `dim_store` and `dim_product` (`test02_warehouse`). `SELECT` only |
 | **What it doesn't do** | Write anything, read the source tables, or talk to the people-stream app or the pipeline. It works whenever the silver tables exist, also with the simulator stopped |
 | **Bundle** | `apps/sales_dashboard/`, bundle `retail_sales_dashboard_bundle`. Separate from the pipeline bundle and from the people-stream app bundle: deployed, started and destroyed on its own |
 | **App** | `sales-bi-<user>` (e.g. `sales-bi-michele-piunti`), under **Compute → Apps** |
@@ -73,7 +73,7 @@ The level buttons on the left of each chart ("Select the chart fields") choose w
 | Step | Delay |
 |---|---|
 | People-stream app → source tables | A batch every 5 s (30 simulated minutes); see [`people_stream.md`](people_stream.md) §4 |
-| Source → silver | The continuous job runs one pipeline update after another; each picks up what's new (`readme.md`, "Running the pipeline") |
+| Source → silver | The continuous job keeps a pipeline update running, with a micro-batch every 2 seconds per table (`pipelines.trigger.interval`); see `readme.md`, "Running the pipeline" |
 | Silver → screen | The dashboard queries silver **every 5 seconds** (`REFRESH_SECONDS` in `app/app.yaml`, at least 2). The **Live** switch stops and restarts the refresh |
 
 Each refresh runs five read-only queries in parallel, all five at once (sales by region, GMT date and hour; people likewise; the geography breakdown; the product breakdown; freshness), on one reused connection per worker thread. Measured on the Serverless Starter Warehouse: about 1.6–1.9 s per query, 3–4 s per refresh. The dimensions are read once and cached.
@@ -90,7 +90,7 @@ While the simulator and the continuous job run, all three dots stay green: a new
 
 **One refresh at a time:** the 5-second interval doesn't run the refresh directly; it only asks for one when the previous refresh has finished (or after 30 s, in case one failed). Otherwise a refresh slower than 5 s, which happens when the warehouse is also busy with the simulator's writes, would be overtaken by the next one, and Dash drops the result of an overtaken callback: the screen would never update. So the screen updates every 5 s, or as soon as the previous refresh ends if that takes longer.
 
-**One simulator run at a time in silver:** if the pipeline isn't full-refreshed after an app START (`readme.md`, "Running the pipeline", step 3), silver keeps the previous run too. Each START restarts the simulated clock from the current time, so the two runs cover the same GMT hours: the totals add both runs, and the trend's timeline ends at the previous run's last simulated hour (up to two days ahead). The new sales then land inside hours already drawn, and the trend looks frozen while the cards and bars still grow. Full-refresh the pipeline after every START.
+**Always the current simulation:** the queries read the `current_…` views, so the page shows only the latest simulation. When START is pressed in the people-stream app, the page switches to the new simulation by itself as soon as its first events reach silver, a few seconds later: the numbers restart from zero and the trend starts a new timeline. Nothing has to be paused or refreshed. Earlier simulations stay in the silver tables but never mix into the page.
 
 If a silver table or column doesn't exist yet (pipeline not deployed, or not full-refreshed since `03_sales.py` or `transaction_timestamp_utc` was added), the page shows a warning and keeps retrying at every refresh.
 
@@ -107,10 +107,10 @@ All in `app/dashboard_sql.py`:
 
 | Step | How |
 |---|---|
-| Before the first deploy | Deploy the pipeline bundle and run the pipeline at least once, so `silver_sales_transactions` and `silver_people_counter_events` exist (the app's permissions are granted on them). The dimensions come from `src/sql/01_…`, `02_…`, `10_…`, `11_…` |
+| Before the first deploy | Deploy the pipeline bundle and run the pipeline at least once, then run `src/sql/15_create_current_simulation_views.sql`, so the views `current_sales_transactions` and `current_people_counter_events` exist (the app's permissions are granted on them). The dimensions come from `src/sql/01_…`, `02_…`, `10_…`, `11_…` |
 | Check | `databricks bundle validate --strict -t dev --profile MPiunti`, from `apps/sales_dashboard/` |
 | Deploy | From `apps/sales_dashboard/`: `databricks bundle deploy -t dev --profile MPiunti`, then `databricks bundle run sales_dashboard -t dev --profile MPiunti` to start the app; or, in the workspace Git folder, open `apps/sales_dashboard/` and use **Deployments** |
-| Granted to the app | `CAN_USE` on the SQL warehouse; `SELECT` on `test02_streaming.silver_sales_transactions` and `silver_people_counter_events`, and on `test02_warehouse.dim_store` and `dim_product`. Nothing else |
+| Granted to the app | `CAN_USE` on the SQL warehouse; `SELECT` on the views `test02_streaming.current_sales_transactions` and `current_people_counter_events`, and on `test02_warehouse.dim_store` and `dim_product`. Nothing else: no access to the silver tables themselves |
 | Stop paying for it | Stop the app under **Compute → Apps**. While open, the page queries the SQL warehouse every 5 seconds, which keeps the warehouse running; switch **Live** off or close the page when you're done |
 
 The pipeline bundle doesn't upload `apps/` (`sync.exclude` in the root `databricks.yml`), and each app bundle has its own state, so deploying one never changes the others.

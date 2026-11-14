@@ -607,6 +607,40 @@ class AppBundleTests(unittest.TestCase):
             self.assertRegex(line, r"^[A-Za-z0-9_.-]+==[\w.]+$")
 
 
+@unittest.skipIf(sim is None, SKIP_REASON)
+class SimulationIdTests(unittest.TestCase):
+
+    def test_simulation_id_is_the_utc_start_time_and_sortable(self):
+        early = sim.new_simulation_id(datetime(2026, 11, 14, 19, 36, 27, 123456, tzinfo=timezone.utc))
+        late = sim.new_simulation_id(datetime(2026, 11, 14, 19, 36, 27, 124000, tzinfo=timezone.utc))
+        self.assertEqual(early, "20261114T193627123")
+        self.assertLess(early, late, "a later START has a higher id, so MAX(simulation_id) is the latest")
+        self.assertLess(late, sim.new_simulation_id(datetime(2027, 1, 1, tzinfo=timezone.utc)))
+        self.assertRegex(sim.new_simulation_id(), r"^\d{8}T\d{9}$")
+        self.assertNotIn("-", early, "ids are split on hyphens")
+
+    def test_every_event_and_transaction_carries_the_simulation_id(self):
+        import sales as sales_mod
+        from test_sales import _catalog, _probs, _store_country
+        g = sim.Generator(_stores(), seed=3)
+        self.assertRegex(g.run_id, r"^\d{8}T\d{9}$")
+        rows, _ = _run(g, days=0.5, n_avg={r: 3000 for r in sim.REGIONS})
+        events = _events(rows)
+        self.assertTrue(events)
+        self.assertEqual({e["simulation_id"] for e in events}, {g.run_id})
+        self.assertTrue(all(e["event_id"].startswith(f"sim-{g.run_id}-") for e in events))
+        seller = sales_mod.SalesGenerator(_catalog(), _store_country(), run_id=g.run_id, seed=1)
+        txs = _events(seller.sales_for(rows, _probs()))
+        self.assertTrue(txs)
+        self.assertEqual({t["simulation_id"] for t in txs}, {g.run_id}, "sales share the people events' id")
+
+    def test_app_explains_that_the_pipeline_follows(self):
+        app = read_text(*APP, "app", "app.py")
+        self.assertIn("New simulation: the running pipeline and the sales dashboard follow it.", app)
+        self.assertNotIn("ull refresh", app, "a START no longer needs a full refresh")
+        self.assertIn('"Simulation id"', app)
+
+
 class PeopleStreamDocTests(unittest.TestCase):
 
     def test_doc_matches_simulator_constants(self):
@@ -621,7 +655,7 @@ class PeopleStreamDocTests(unittest.TestCase):
     def test_readme_lists_app_files(self):
         readme = read_text("readme.md")
         for root, dirs, files in os.walk(path(*APP)):
-            dirs[:] = [d for d in dirs if d != "__pycache__"]  # local bytecode, gitignored
+            dirs[:] = [d for d in dirs if d not in ("__pycache__", ".databricks")]  # local, gitignored
             for f in files:
                 self.assertIn(f, readme, f"{os.path.join(root, f)} isn't in readme.md")
 

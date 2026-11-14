@@ -20,7 +20,6 @@ import queue
 import random
 import threading
 import time
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -271,13 +270,23 @@ def store_tick(stream, sim_from_utc, sim_to_utc, n_avg, rng, avg_stay=None):
     return events
 
 
+def new_simulation_id(now=None):
+    """Identifier of one simulation (one START): its real UTC start time, to the millisecond.
+
+    Sortable, so the latest simulation is MAX(simulation_id): that's how the pipeline's views and the
+    dashboard find the current simulation. See doc/people_stream.md, "Simulation id".
+    """
+    now = now or datetime.now(timezone.utc)
+    return now.strftime("%Y%m%dT%H%M%S") + f"{now.microsecond // 1000:03d}"
+
+
 class Generator:
     """Turns simulated time windows into source-table rows for every store."""
 
     def __init__(self, stores, next_offsets=None, run_id=None, seed=None):
         self.streams = [StoreStream(s) for s in stores]
         self.next_offset = {p: (next_offsets or {}).get(p, 1) for p in PARTITION.values()}
-        self.run_id = run_id or uuid.uuid4().hex[:8]
+        self.run_id = run_id or new_simulation_id()  # the simulation id
         self.rng = random.Random(seed)
 
     def tick(self, sim_from_utc, sim_to_utc, n_avg_by_region, avg_stay=None):
@@ -292,6 +301,7 @@ class Generator:
                 self.next_offset[partition] += 1
                 payload = {
                     "event_id": f"sim-{self.run_id}-{partition}-{offset:010d}",
+                    "simulation_id": self.run_id,
                     "store_id": stream.store.store_id,
                     "sensor_id": stream.store.sensor_id,
                     "event_timestamp": local_ts.isoformat(timespec="milliseconds"),
