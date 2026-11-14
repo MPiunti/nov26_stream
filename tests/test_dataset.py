@@ -72,6 +72,14 @@ class StoreDimensionTests(unittest.TestCase):
         self.assertRegex(sql, r"is_flagship BOOLEAN NOT NULL")
         self.assertFalse(os.path.exists(path("src", "sql", "01a_add_macro_region.sql")))
 
+    def test_validation_scripts_name_their_columns_in_the_first_select(self):
+        """A UNION takes its column names from its first SELECT; the final SELECT reads them by name."""
+        for f in ("03_validate_dim_store.sql", "13_validate_dim_client_product.sql"):
+            sql = re.sub(r"--[^\n]*", "", read_text("src", "sql", f))
+            first = sql.split("checks AS (", 1)[1].split("UNION ALL", 1)[0]
+            for alias in ("AS validation", "AS expected_value", "AS actual_value"):
+                self.assertIn(alias, first, f"{f}: first check needs {alias}")
+
     def test_populate_corrects_existing_rows(self):
         sql = read_text(*POPULATE_SQL)
         for col in ("macro_region", "store_name", "is_flagship"):

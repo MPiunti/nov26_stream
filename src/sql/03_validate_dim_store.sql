@@ -52,16 +52,17 @@ actual_macro_region AS (
 checks AS (
 
     -- Total number of stores
-    -- The two flagship stores, by id and name
+    -- The two flagship stores, by id and name.
+    -- First SELECT of the UNION: it names the columns.
     SELECT
-        'FLAGSHIPS',
-        2,
+        'FLAGSHIPS' AS validation,
+        2 AS expected_value,
         COUNT_IF(
             is_flagship AND (
                 (store_id = 'IT-MI-001' AND store_name = 'Milan Galleria Vittorio Emanuele')
                 OR (store_id = 'US-NY-001' AND store_name = 'New York Fifth Avenue')
             )
-        )
+        ) AS actual_value
     FROM workspace.test02_warehouse.dim_store
 
     UNION ALL
