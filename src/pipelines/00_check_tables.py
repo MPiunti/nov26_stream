@@ -17,6 +17,16 @@ REQUIRED_TABLES = {
     "workspace.test02_warehouse.dim_store": (
         "src/sql/01_create_dim_store.sql and 02_populate_dim_store.sql", True
     ),
+    # Sales (03_sales.py): see doc/sales.md.
+    "workspace.test02_streaming.simulated_sales_source": (
+        "src/sql/12_create_simulated_sales_source.sql", False
+    ),
+    "workspace.test02_warehouse.dim_client": (
+        "src/sql/08_create_dim_client.sql and 09_populate_dim_client.sql", True
+    ),
+    "workspace.test02_warehouse.dim_product": (
+        "src/sql/10_create_dim_product.sql and 11_populate_dim_product.sql", True
+    ),
 }
 
 

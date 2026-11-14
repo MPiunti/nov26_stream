@@ -159,6 +159,16 @@ class SalesGeneratorTests(unittest.TestCase):
             self.assertEqual(row["source_timestamp"], exit_row["source_timestamp"])
             self.assertEqual(row["source_topic"], "retail-sales-app")
 
+    def test_every_simulated_transaction_passes_the_silver_sales_rules(self):
+        from test_project_consistency import _sales_rejections
+        stores = {s.store_id for s in _stores()}
+        clients = {c for c, _ in _clients()}
+        products = {p.product_id: p.category for p in _products()}
+        rows = self._sales(_probs())
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertEqual(_sales_rejections(row["raw_event"], stores, clients, products), [], row["raw_event"])
+
     def test_70_percent_local_clients_and_inverse_at_flagships(self):
         gen = sales.SalesGenerator(_catalog(), _store_country(), run_id="mix12345", seed=5,
                                    local_share=sim.CONFIG.local_share, flagship_ids=sim.FLAGSHIP_IDS,

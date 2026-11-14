@@ -8,7 +8,8 @@ Reference for how the project's tables are organised: which schema holds what, t
 | [`client.md`](client.md) | The client dimension (`dim_client`) and how buyers are chosen (local clients and visitors) |
 | [`product.md`](product.md) | The product dimension (`dim_product`), categories and prices |
 | [`people_stream.md`](people_stream.md) | The app that streams people events into `simulated_event_source` |
-| [`sales.md`](sales.md) | The sales simulator that streams transactions into `simulated_sales_source` |
+| [`sales.md`](sales.md) | The sales simulator that streams transactions into `simulated_sales_source`, and the silver sales rules |
+| [`sales_dashboard.md`](sales_dashboard.md) | The read-only BI app that queries the silver tables and the dimensions |
 
 "Warehouse" on this page means the **data warehouse** (the `test02_warehouse` schema). The app's `sql_warehouse.py` is unrelated: it talks to the Databricks **SQL warehouse**, the compute that runs the app's SQL.
 
@@ -19,9 +20,9 @@ Both are in the catalog `workspace` (the bundle variable `catalog`).
 | Schema | Bundle variable | Holds | Written by |
 |---|---|---|---|
 | `test02_warehouse` | `warehouse_schema` | **Dimensions** only: `dim_store`, `dim_client`, `dim_product`. Small, slowly changing master data, loaded by idempotent scripts | `src/sql/01_…`, `02_…`, `08_…` to `11_…`, by hand |
-| `test02_streaming` | `schema` | **Streaming** only: the append-only sources `simulated_event_source` and `simulated_sales_source`, and the pipeline's streaming tables (bronze, silver, quarantine) | The people-stream app (sources), `src/sql/04_…`, `05_…`, `12_…`, and the pipeline |
+| `test02_streaming` | `schema` | **Streaming** only: the append-only sources `simulated_event_source` and `simulated_sales_source`, and the pipeline's streaming tables (bronze, silver, quarantine, for people events and for sales) | The people-stream app (sources), `src/sql/04_…`, `05_…`, `12_…`, and the pipeline |
 
-The pipeline and the app read the dimensions from `test02_warehouse` and write only to `test02_streaming`. Nothing streams into `test02_warehouse`.
+The pipeline and the apps read the dimensions from `test02_warehouse`; the pipeline and the people-stream app write only to `test02_streaming`, and the sales dashboard writes nothing. Nothing streams into `test02_warehouse`.
 
 ## 2. Tables
 
@@ -35,6 +36,9 @@ The pipeline and the app read the dimensions from `test02_warehouse` and write o
 | `bronze_people_counter_events` | `test02_streaming` | One message | as the source | pipeline | `readme.md` |
 | `silver_people_counter_events` | `test02_streaming` | One valid event | `event_id` | pipeline | `readme.md` |
 | `quarantine_people_counter_events` | `test02_streaming` | One invalid event | none | pipeline | `readme.md` |
+| `bronze_sales_transactions` | `test02_streaming` | One sales message | as the source | pipeline | `sales.md` §10 |
+| `silver_sales_transactions` | `test02_streaming` | One valid transaction | `transaction_id` | pipeline | `sales.md` §10 |
+| `quarantine_sales_transactions` | `test02_streaming` | One invalid transaction | none | pipeline | `sales.md` §10 |
 
 ## 3. Natural keys only
 
@@ -43,14 +47,14 @@ Every table is identified by its business key; there are **no surrogate keys** (
 ```
  dim_store (store_id) ◀──────────────┬──────────── silver_people_counter_events.store_id   (FOREIGN KEY)
       ▲                              │
-      │ country_code                 └──────────── sales payload store_id
- dim_client (client_id) ◀───────────────────────── sales payload client_id
- dim_product (product_id) ◀──────────────────────── sales payload product_id
- silver event_id ◀───────────────────────────────── sales payload exit_event_id
+      │ country_code                 └──────────── silver_sales_transactions.store_id      (FOREIGN KEY)
+ dim_client (client_id) ◀───────────────────────── silver_sales_transactions.client_id     (FOREIGN KEY)
+ dim_product (product_id) ◀──────────────────────── silver_sales_transactions.product_id    (FOREIGN KEY)
+ silver event_id ◀───────────────────────────────── silver_sales_transactions.exit_event_id (plain column)
 ```
 
 - `silver_people_counter_events` declares `FOREIGN KEY (store_id) REFERENCES workspace.test02_warehouse.dim_store(store_id)` (informational, as all Unity Catalog constraints).
-- The sales source holds raw JSON, so its references are not constraints yet; the silver sales table of the next step will declare them the same way (`sales.md` §2).
+- `silver_sales_transactions` declares its `store_id`, `client_id` and `product_id` foreign keys the same way (`sales.md` §10). The sales source holds raw JSON, so it has no constraints.
 - `dim_client.country_code` is a store country: every client is registered in a country that has stores.
 
 ## 4. Loading order

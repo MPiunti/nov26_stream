@@ -9,10 +9,10 @@ The stores, opening hours, payload and `N_AVG_PEOPLE_*` parameters are defined i
 | | |
 |---|---|
 | **What it does** | Simulates the people flow of all 200 stores and inserts the events into `workspace.test02_streaming.simulated_event_source`. Its sales simulator turns people leaving into sales transactions in `simulated_sales_source`; see [`sales.md`](sales.md) |
-| **What it doesn't do** | Run the pipeline. The pipeline is triggered: run it (or schedule it) to move new events to bronze, silver and quarantine |
+| **What it doesn't do** | Run the pipeline. The pipeline moves new events to bronze, silver and quarantine when it runs; its continuous job keeps it running (`readme.md`, "Running the pipeline"). The sales dashboard ([`sales_dashboard.md`](sales_dashboard.md)) then shows them |
 | **Bundle** | `apps/people_stream/`, bundle `retail_people_stream_bundle`. Separate from the pipeline bundle at the repo root: deployed, started and destroyed on its own |
 | **App** | `people-stream-<user>` (e.g. `people-stream-michele-piunti`), under **Compute → Apps** |
-| **Code** | `apps/people_stream/app/`: `app.py` (screen), `simulator.py` (generator, standard library only), `warehouse.py` (SQL warehouse reads and writes) |
+| **Code** | `apps/people_stream/app/`: `app.py` (screen), `simulator.py` (generator, standard library only), `sql_warehouse.py` (SQL warehouse reads and writes) |
 
 ```
  app screen ──START/STOP, sliders──▶ simulator (one thread)

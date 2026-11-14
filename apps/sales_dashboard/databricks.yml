@@ -1,0 +1,44 @@
+# Declarative Automation Bundle for the sales BI dashboard app.
+# Separate from the pipeline bundle at the repo root and from the people-stream app: deploy, start and
+# destroy it on its own. Read-only: it only queries silver tables and dimensions. See doc/sales_dashboard.md.
+bundle:
+  name: "retail_sales_dashboard_bundle"
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Catalog of the silver tables and the dimensions
+    default: workspace
+  schema:
+    description: Streaming schema of the pipeline's silver tables
+    default: test02_streaming
+  warehouse_schema:
+    description: Data warehouse schema of the dimensions the app reads (dim_store, dim_product)
+    default: test02_warehouse
+  app_name:
+    description: 'App name: lowercase letters, digits and hyphens, at most 30 characters.'
+    default: sales-bi-${workspace.current_user.domain_friendly_name}
+  warehouse_id:
+    description: SQL warehouse the app queries through.
+    lookup:
+      warehouse: Serverless Starter Warehouse
+
+targets:
+  # The 'dev' target, for development purposes. This target is the default.
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://dbc-06fb0002-68c5.cloud.databricks.com
+
+  # The 'prod' target, used for production deployment.
+  prod:
+    mode: production
+    workspace:
+      host: https://dbc-06fb0002-68c5.cloud.databricks.com
+      # We always use /Users/michele.piunti@gmail.com for all resources to make sure we only have a single copy.
+      root_path: /Users/michele.piunti@gmail.com/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      user_name: michele.piunti@gmail.com

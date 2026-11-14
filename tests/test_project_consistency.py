@@ -10,7 +10,8 @@ from datetime import datetime
 from helpers import ROOT, constants, parse, path, pipeline_tables, read_text
 
 CHECK_FILE = "src/pipelines/00_check_tables.py"
-PIPELINE_FILES = [CHECK_FILE, "src/pipelines/01_bronze.py", "src/pipelines/02_silver.py"]
+SALES_FILE = "src/pipelines/03_sales.py"
+PIPELINE_FILES = [CHECK_FILE, "src/pipelines/01_bronze.py", "src/pipelines/02_silver.py", SALES_FILE]
 PIPELINE_YML = ("resources", "modeling.peoplecounter.pipeline.yml")
 INSERT_SQL = ("src", "sql", "05_insert_simulated_events.sql")
 
@@ -20,13 +21,45 @@ def _bundle_variable_default(name):
     return m.group(1) if m else None
 
 
-def _rejection_codes():
-    """The codes in the rejection_reasons list of 02_silver.py: the second argument of each F.when(...)."""
-    for node in ast.walk(parse("src/pipelines/02_silver.py")):
+def _rejection_codes(file="src/pipelines/02_silver.py", list_name="rejection_reasons"):
+    """The codes in a rejection list of a pipeline file: the second argument of each F.when(...)."""
+    for node in ast.walk(parse(file)):
         if (isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
-                and node.targets[0].id == "rejection_reasons"):
+                and node.targets[0].id == list_name):
             return {ast.literal_eval(call.args[1]) for call in node.value.elts}
-    raise AssertionError("rejection_reasons not found in 02_silver.py")
+    raise AssertionError(f"{list_name} not found in {file}")
+
+
+def _sales_rejections(raw_event, store_ids, client_ids, product_categories):
+    """Plain-Python mirror of the rules in 03_sales.py (doc/sales.md, "Silver sales")."""
+    try:
+        t = json.loads(raw_event)
+    except ValueError:
+        return ["INVALID_JSON"]
+    reasons = []
+    if not (t.get("transaction_id") or "").strip():
+        reasons.append("MISSING_TRANSACTION_ID")
+    try:
+        datetime.fromisoformat(t.get("transaction_timestamp") or "")
+    except ValueError:
+        reasons.append("INVALID_TRANSACTION_TIMESTAMP")
+    q, price, amount = t.get("quantity"), t.get("unit_price"), t.get("amount")
+    if not isinstance(q, int) or q <= 0:
+        reasons.append("INVALID_QUANTITY")
+    if price is None or price <= 0 or amount is None or abs(amount - (q or 0) * price) > 0.005:
+        reasons.append("INVALID_AMOUNT")
+    if (t.get("currency") or "").strip().upper() != "EUR":
+        reasons.append("INVALID_CURRENCY")
+    if (t.get("store_id") or "").strip() not in store_ids:
+        reasons.append("UNKNOWN_STORE")
+    if (t.get("client_id") or "").strip() not in client_ids:
+        reasons.append("UNKNOWN_CLIENT")
+    product = (t.get("product_id") or "").strip()
+    if product not in product_categories:
+        reasons.append("UNKNOWN_PRODUCT")
+    elif (t.get("category") or "").strip().upper() != product_categories[product]:
+        reasons.append("CATEGORY_MISMATCH")
+    return reasons
 
 
 def _store_ids():
@@ -161,17 +194,38 @@ class PipelineCodeTests(unittest.TestCase):
                     schema = warehouse if value.split(".")[-1].startswith("dim_") else streaming
                     self.assertTrue(value.startswith(f"{catalog}.{schema}."), f"{f}: {name} = {value}")
         self.assertIn(f"REFERENCES {catalog}.{warehouse}.dim_store(store_id)", read_text("src/pipelines/02_silver.py"))
+        for dim, key in (("dim_store", "store_id"), ("dim_client", "client_id"), ("dim_product", "product_id")):
+            self.assertIn(f"FOREIGN KEY ({key})\n        REFERENCES {catalog}.{warehouse}.{dim}({key})",
+                          read_text(SALES_FILE))
+        self.assertIn("PRIMARY KEY (transaction_id)", read_text(SALES_FILE))
 
     def test_silver_and_quarantine_select_their_schema_columns(self):
-        tree = parse("src/pipelines/02_silver.py")
-        consts = constants(tree)
-        source = read_text("src/pipelines/02_silver.py")
-        for table, schema_name in (("silver_people_counter_events", "SILVER_SCHEMA"),
-                                   ("quarantine_people_counter_events", "QUARANTINE_SCHEMA")):
-            columns = re.findall(r"^\s{4}(\w+) [A-Z_]+", consts[schema_name], re.M)
-            body = source.split(f"def {table}():", 1)[1].split("\n# ====", 1)[0]
-            selected = re.findall(r'^\s+"(\w+)",?\s*$', body.split(".select(", 1)[1], re.M)
-            self.assertEqual(selected, columns, f"{table} selects columns out of step with {schema_name}")
+        for f, pairs in (("src/pipelines/02_silver.py", (("silver_people_counter_events", "SILVER_SCHEMA"),
+                                                         ("quarantine_people_counter_events", "QUARANTINE_SCHEMA"))),
+                         (SALES_FILE, (("silver_sales_transactions", "SILVER_SALES_SCHEMA"),
+                                       ("quarantine_sales_transactions", "QUARANTINE_SALES_SCHEMA")))):
+            consts = constants(parse(f))
+            source = read_text(f)
+            for table, schema_name in pairs:
+                columns = re.findall(r"^\s{4}(\w+) [A-Z_]+", consts[schema_name], re.M)
+                body = source.split(f"def {table}():", 1)[1].split("\n# ====", 1)[0]
+                selected = re.findall(r'^\s+"(\w+)",?\s*$', body.split(".select(", 1)[1], re.M)
+                self.assertEqual(selected, columns, f"{table} selects columns out of step with {schema_name}")
+
+    def test_sales_bronze_skips_the_deletes_of_an_app_start(self):
+        code = read_text(SALES_FILE)
+        self.assertRegex(code, r'spark\.readStream\s*\.option\("skipChangeCommits", "true"\)\s*'
+                               r'\.table\(SALES_SOURCE_TABLE\)')
+
+    def test_sales_tables(self):
+        self.assertEqual(set(pipeline_tables(parse(SALES_FILE))),
+                         {"bronze_sales_transactions", "silver_sales_transactions", "quarantine_sales_transactions"})
+
+    def test_sales_rejection_codes_are_documented(self):
+        section = read_text("doc", "sales.md").split("## 10. Silver sales", 1)[1].split("\n## ", 1)[0]
+        documented = set(re.findall(r"^\| `([A-Z_]+)` \|", section, re.M))
+        self.assertEqual(_rejection_codes(SALES_FILE, "sales_rejection_reasons"), documented)
+        self.assertEqual(set(_sales_rejections("{", set(), set(), {})), {"INVALID_JSON"})
 
     def test_pipelines_folder_holds_only_pipeline_sources(self):
         """Hand-run SQL scripts belong in src/sql/, not next to the pipeline sources."""

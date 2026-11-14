@@ -10,7 +10,7 @@ The people flow it builds on is in [`people_stream.md`](people_stream.md); store
 |---|---|
 | **What it does** | A second simulator on the people stream's timeline: for each `EXIT` event, it decides who of the people leaving bought something, and inserts one sales transaction per purchase into `workspace.test02_streaming.simulated_sales_source` |
 | **Where it runs** | Inside the people-stream app (`apps/people_stream/app/sales.py`), in the same batches as the people events: START, STOP and the 48-hour limit apply to both |
-| **What it doesn't do (yet)** | Load the sales into bronze/silver. The pipeline doesn't read `simulated_sales_source` yet; a sales pipeline step with the foreign keys of §5 is the next step |
+| **Loaded by** | The pipeline (`src/pipelines/03_sales.py`): bronze, silver and quarantine sales tables, with the foreign keys of §2; see §10. The sales dashboard reads silver ([`sales_dashboard.md`](sales_dashboard.md)) |
 
 ```
  people stream (one batch)                        sales simulator
@@ -32,8 +32,9 @@ All keys are **natural keys**; there are no surrogate keys. Every reference uses
 | `dim_client` | One registered client | `client_id` | (registered in a `dim_store` country) |
 | `dim_product` | One product (SKU) | `product_id` | |
 | `simulated_sales_source` | One message = one transaction | `source_topic` + `source_partition` + `source_offset` (message identity) | Payload: `store_id` → `dim_store`, `client_id` → `dim_client`, `product_id` → `dim_product`, `exit_event_id` → the people event's `event_id` |
+| `silver_sales_transactions` | One valid transaction | `transaction_id` | `FOREIGN KEY` `store_id` → `dim_store`, `client_id` → `dim_client`, `product_id` → `dim_product` (§10) |
 
-The source table holds raw JSON, like `simulated_event_source`, so the references inside the payload are not constraints yet. The silver sales table of the next step will declare them as Unity Catalog `FOREIGN KEY` constraints on the natural keys (informational, like the existing `store_id` foreign key of `silver_people_counter_events`).
+The source table holds raw JSON, like `simulated_event_source`, so the references inside the payload are not constraints there. `silver_sales_transactions` declares them as Unity Catalog `FOREIGN KEY` constraints on the natural keys (informational, like the `store_id` foreign key of `silver_people_counter_events`); `exit_event_id` is kept as a plain column. See §10.
 
 ## 3. Purchase probabilities (PURCHASE_PROB)
 
@@ -130,3 +131,30 @@ Transactions follow the exits, so they peak when a region's stores close at 20:0
 | Tables | In the pipeline bundle, run `src/sql/08_…` to `11_…` (clients and products), `12_…` (sales source), then check with `13_…`. See `client.md` §5 and `product.md` §5 |
 | Granted to the app | `SELECT` on `test02_warehouse.dim_client` and `dim_product`; `SELECT` and `MODIFY` on `simulated_sales_source` (`apps/people_stream/resources/people_stream.app.yml`). The tables must exist before the app bundle is deployed |
 | App settings | `CLIENT_TABLE`, `PRODUCT_TABLE`, `SALES_TABLE` in `apps/people_stream/app/app.yaml` |
+
+## 10. Silver sales
+
+The pipeline's `src/pipelines/03_sales.py` loads the sales source the same way `01_bronze.py` and `02_silver.py` load the people events:
+
+| Table | Content |
+|---|---|
+| `bronze_sales_transactions` | The source rows as they are, plus `ingestion_timestamp`. Reads the source with `skipChangeCommits`, so the deletes of an app START don't stop the stream |
+| `silver_sales_transactions` | Parsed, typed and valid transactions: the §5 fields, `unit_price` and `amount` as `DECIMAL(12,2)`, `transaction_timestamp` as `TIMESTAMP_NTZ` (store local time) plus the raw string, and the store's time zone. Primary key `transaction_id`; foreign keys `store_id` → `dim_store`, `client_id` → `dim_client`, `product_id` → `dim_product` (informational, on the natural keys in `test02_warehouse`). Read by the sales dashboard ([`sales_dashboard.md`](sales_dashboard.md)) |
+| `quarantine_sales_transactions` | Invalid transactions, with `rejection_reason`, `record_status` = `OPEN` and `quarantine_timestamp` |
+
+A transaction goes to silver if it passes every rule, and to quarantine otherwise; `rejection_reason` lists every failed rule, separated by `|`. The simulator's transactions pass them all.
+
+| Code | Rule |
+|---|---|
+| `INVALID_JSON` | The payload isn't valid JSON for the transaction schema |
+| `MISSING_TRANSACTION_ID` | `transaction_id` is missing or empty |
+| `INVALID_TRANSACTION_TIMESTAMP` | `transaction_timestamp` is missing or not a valid timestamp |
+| `INVALID_QUANTITY` | `quantity` is missing, zero or negative |
+| `INVALID_AMOUNT` | `unit_price` is missing, zero or negative, or `amount` isn't `quantity × unit_price` (to the cent) |
+| `INVALID_CURRENCY` | `currency` isn't `EUR` (after trimming and upper-casing) |
+| `UNKNOWN_STORE` | `store_id` is missing or isn't in `dim_store` |
+| `UNKNOWN_CLIENT` | `client_id` is missing or isn't in `dim_client` |
+| `UNKNOWN_PRODUCT` | `product_id` is missing or isn't in `dim_product` |
+| `CATEGORY_MISMATCH` | `category` (after trimming and upper-casing) isn't the product's category in `dim_product` |
+
+The pre-flight check (`00_check_tables.py`) also requires `simulated_sales_source`, and a non-empty `dim_client` and `dim_product`: run `src/sql/08_…` to `12_…` before the pipeline. After an app START, the same full refresh as for the people events rebuilds the sales tables (`readme.md`, "Running the pipeline").

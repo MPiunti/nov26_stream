@@ -1,0 +1,34 @@
+resources:
+  apps:
+    sales_dashboard:
+      name: ${var.app_name}
+      description: Sales BI dashboard. Live sales and people performance from the silver tables, with drill-down. Read-only. See doc/sales_dashboard.md.
+      # The start command and environment variables are in app/app.yaml.
+      source_code_path: ../app
+      # Granted to the app's service principal on deploy: SELECT only, nothing is written.
+      # The silver tables must already exist: deploy and run the pipeline (with 03_sales.py) first.
+      resources:
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+        - name: sales-table
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.schema}.silver_sales_transactions
+            securable_type: TABLE
+            permission: SELECT
+        - name: people-table
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.schema}.silver_people_counter_events
+            securable_type: TABLE
+            permission: SELECT
+        - name: store-table
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.warehouse_schema}.dim_store
+            securable_type: TABLE
+            permission: SELECT
+        - name: product-table
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.warehouse_schema}.dim_product
+            securable_type: TABLE
+            permission: SELECT

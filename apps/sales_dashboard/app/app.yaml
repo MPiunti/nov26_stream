@@ -1,0 +1,18 @@
+command: ["python", "app.py"]
+
+env:
+  # Injected from the app's sql-warehouse resource (resources/sales_dashboard.app.yml).
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql-warehouse
+  # Keep these the same as the table resources in resources/sales_dashboard.app.yml.
+  - name: SALES_TABLE
+    value: workspace.test02_streaming.silver_sales_transactions
+  - name: PEOPLE_TABLE
+    value: workspace.test02_streaming.silver_people_counter_events
+  - name: STORE_TABLE
+    value: workspace.test02_warehouse.dim_store
+  - name: PRODUCT_TABLE
+    value: workspace.test02_warehouse.dim_product
+  # Seconds between two refreshes of the screen (at least 2). See doc/sales_dashboard.md, "Freshness".
+  - name: REFRESH_SECONDS
+    value: "5"
