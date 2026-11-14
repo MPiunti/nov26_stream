@@ -14,7 +14,7 @@ resources:
             permission: CAN_USE
         - name: store-table
           uc_securable:
-            securable_full_name: ${var.catalog}.${var.schema}.dim_store
+            securable_full_name: ${var.catalog}.${var.warehouse_schema}.dim_store
             securable_type: TABLE
             permission: SELECT
         - name: source-table-read
@@ -30,12 +30,12 @@ resources:
         # Sales simulator (doc/sales.md): run src/sql/08 to 12 first.
         - name: client-table
           uc_securable:
-            securable_full_name: ${var.catalog}.${var.schema}.dim_client
+            securable_full_name: ${var.catalog}.${var.warehouse_schema}.dim_client
             securable_type: TABLE
             permission: SELECT
         - name: product-table
           uc_securable:
-            securable_full_name: ${var.catalog}.${var.schema}.dim_product
+            securable_full_name: ${var.catalog}.${var.warehouse_schema}.dim_product
             securable_type: TABLE
             permission: SELECT
         - name: sales-table-read

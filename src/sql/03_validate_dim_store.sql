@@ -1,7 +1,7 @@
 
 -- ============================================================
 -- 03 - Validate Silver store dimension
--- Target: workspace.test02_streaming.dim_store
+-- Target: workspace.test02_warehouse.dim_store
 -- Expected records: 200
 -- ============================================================
 
@@ -28,7 +28,7 @@ actual_country AS (
     SELECT
         country_code,
         COUNT(*) AS actual_count
-    FROM workspace.test02_streaming.dim_store
+    FROM workspace.test02_warehouse.dim_store
     GROUP BY country_code
 ),
 
@@ -45,18 +45,40 @@ actual_macro_region AS (
     SELECT
         macro_region,
         COUNT(*) AS actual_count
-    FROM workspace.test02_streaming.dim_store
+    FROM workspace.test02_warehouse.dim_store
     GROUP BY macro_region
 ),
 
 checks AS (
 
     -- Total number of stores
+    -- The two flagship stores, by id and name
+    SELECT
+        'FLAGSHIPS',
+        2,
+        COUNT_IF(
+            is_flagship AND (
+                (store_id = 'IT-MI-001' AND store_name = 'Milan Galleria Vittorio Emanuele')
+                OR (store_id = 'US-NY-001' AND store_name = 'New York Fifth Avenue')
+            )
+        )
+    FROM workspace.test02_warehouse.dim_store
+
+    UNION ALL
+
+    SELECT
+        'NON_FLAGSHIPS_FLAGGED',
+        0,
+        COUNT_IF(is_flagship AND store_id NOT IN ('IT-MI-001', 'US-NY-001'))
+    FROM workspace.test02_warehouse.dim_store
+
+    UNION ALL
+
     SELECT
         'TOTAL_STORES' AS validation,
         200 AS expected_value,
         COUNT(*) AS actual_value
-    FROM workspace.test02_streaming.dim_store
+    FROM workspace.test02_warehouse.dim_store
 
     UNION ALL
 
@@ -87,7 +109,7 @@ checks AS (
         'INVALID_COUNTRY_MACRO_REGION',
         0,
         COUNT(*)
-    FROM workspace.test02_streaming.dim_store
+    FROM workspace.test02_warehouse.dim_store
     WHERE macro_region IS NULL
        OR NOT (
         (country_code IN ('IT', 'FR', 'DE', 'ES', 'NL', 'BE', 'AT', 'PT', 'SE') AND macro_region = 'EUROPE')
@@ -104,7 +126,7 @@ checks AS (
         COUNT(*)
     FROM (
         SELECT store_id
-        FROM workspace.test02_streaming.dim_store
+        FROM workspace.test02_warehouse.dim_store
         GROUP BY store_id
         HAVING COUNT(*) > 1
     ) duplicates
@@ -116,7 +138,7 @@ checks AS (
         'NULL_MANDATORY_ATTRIBUTES',
         0,
         COUNT(*)
-    FROM workspace.test02_streaming.dim_store
+    FROM workspace.test02_warehouse.dim_store
     WHERE store_id IS NULL
        OR store_name IS NULL
        OR country_code IS NULL
@@ -124,6 +146,7 @@ checks AS (
        OR city IS NULL
        OR timezone_id IS NULL
        OR is_active IS NULL
+       OR is_flagship IS NULL
        OR created_at IS NULL
 
     UNION ALL
@@ -133,7 +156,7 @@ checks AS (
         'INVALID_COUNTRY_CODES',
         0,
         COUNT(*)
-    FROM workspace.test02_streaming.dim_store
+    FROM workspace.test02_warehouse.dim_store
     WHERE LENGTH(country_code) <> 2
 
     UNION ALL
@@ -143,7 +166,7 @@ checks AS (
         'INVALID_COUNTRY_TIMEZONE',
         0,
         COUNT(*)
-    FROM workspace.test02_streaming.dim_store
+    FROM workspace.test02_warehouse.dim_store
     WHERE NOT (
         (country_code = 'IT' AND timezone_id = 'Europe/Rome')
         OR (country_code = 'FR' AND timezone_id = 'Europe/Paris')

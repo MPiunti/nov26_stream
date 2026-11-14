@@ -12,10 +12,10 @@ import sales
 from simulator import PARTITION, SOURCE_TOPIC, Store
 
 DEFAULT_TABLES = {
-    "STORE_TABLE": "workspace.test02_streaming.dim_store",
+    "STORE_TABLE": "workspace.test02_warehouse.dim_store",
     "SOURCE_TABLE": "workspace.test02_streaming.simulated_event_source",
-    "CLIENT_TABLE": "workspace.test02_streaming.dim_client",
-    "PRODUCT_TABLE": "workspace.test02_streaming.dim_product",
+    "CLIENT_TABLE": "workspace.test02_warehouse.dim_client",
+    "PRODUCT_TABLE": "workspace.test02_warehouse.dim_product",
     "SALES_TABLE": "workspace.test02_streaming.simulated_sales_source",
 }
 CHUNK_ROWS = 10000  # rows per MERGE statement (about 3 MB of SQL); each MERGE costs about 1 s however small

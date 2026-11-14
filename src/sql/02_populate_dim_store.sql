@@ -1,7 +1,7 @@
 
 -- ============================================================
--- 02 - Populate Silver store dimension
--- Target: workspace.test02_streaming.dim_store
+-- 02 - Populate the store dimension
+-- Target: workspace.test02_warehouse.dim_store
 -- Expected records: 200
 --
 -- Distribution:
@@ -13,13 +13,17 @@
 --   South Korea       13   ASIA
 --
 -- Macro regions: EUROPE 100, AMERICAS 60, ASIA 40.
+-- Flagships (is_flagship = TRUE, own names):
+--   IT-MI-001  Milan Galleria Vittorio Emanuele
+--   US-NY-001  New York Fifth Avenue
 -- Full rules: doc/dataset.md, "Store dimension".
 --
 -- Idempotent execution: MERGE by natural store_id. New stores are
--- inserted; existing stores get macro_region filled or corrected.
+-- inserted; existing stores get store_name, macro_region and
+-- is_flagship filled or corrected.
 -- ============================================================
 
-MERGE INTO workspace.test02_streaming.dim_store AS target
+MERGE INTO workspace.test02_warehouse.dim_store AS target
 
 USING (
     WITH city_allocation AS (
@@ -86,12 +90,11 @@ USING (
                 LPAD(CAST(shop_number AS STRING), 3, '0')
             ) AS store_id,
 
-            CONCAT(
-                'Retail Store ',
-                city,
-                ' ',
-                LPAD(CAST(shop_number AS STRING), 3, '0')
-            ) AS store_name,
+            CASE CONCAT(country_code, '-', city_code, '-', LPAD(CAST(shop_number AS STRING), 3, '0'))
+                WHEN 'IT-MI-001' THEN 'Milan Galleria Vittorio Emanuele'
+                WHEN 'US-NY-001' THEN 'New York Fifth Avenue'
+                ELSE CONCAT('Retail Store ', city, ' ', LPAD(CAST(shop_number AS STRING), 3, '0'))
+            END AS store_name,
 
             country_code,
             country_name,
@@ -103,6 +106,9 @@ USING (
                 WHEN country_code IN ('US') THEN 'AMERICAS'
                 WHEN country_code IN ('CN', 'JP', 'KR') THEN 'ASIA'
             END AS macro_region,
+
+            CONCAT(country_code, '-', city_code, '-', LPAD(CAST(shop_number AS STRING), 3, '0'))
+                IN ('IT-MI-001', 'US-NY-001') AS is_flagship,
 
             timezone_id
 
@@ -119,8 +125,14 @@ USING (
 
 ON target.store_id = source.store_id
 
-WHEN MATCHED AND NOT (target.macro_region <=> source.macro_region) THEN UPDATE SET
+WHEN MATCHED AND NOT (
+    target.macro_region <=> source.macro_region
+    AND target.store_name <=> source.store_name
+    AND target.is_flagship <=> source.is_flagship
+) THEN UPDATE SET
+    target.store_name = source.store_name,
     target.macro_region = source.macro_region,
+    target.is_flagship = source.is_flagship,
     target.updated_at = CURRENT_TIMESTAMP()
 
 WHEN NOT MATCHED THEN INSERT (
@@ -131,6 +143,7 @@ WHEN NOT MATCHED THEN INSERT (
     city,
     region,
     macro_region,
+    is_flagship,
     timezone_id,
     is_active,
     created_at,
@@ -144,6 +157,7 @@ VALUES (
     source.city,
     source.region,
     source.macro_region,
+    source.is_flagship,
     source.timezone_id,
     TRUE,
     CURRENT_TIMESTAMP(),

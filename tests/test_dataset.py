@@ -64,17 +64,47 @@ class StoreDimensionTests(unittest.TestCase):
                          "03_validate's INVALID_COUNTRY_MACRO_REGION check differs from 02_populate")
         self.assertEqual(_doc_mapping(), populate, "doc/dataset.md §2.3 differs from 02_populate")
 
-    def test_create_adds_macro_region_only_when_missing(self):
-        """01 is rerunnable: the ALTER runs only if information_schema lacks the column."""
+    def test_create_builds_the_warehouse_schema_and_store_table(self):
         sql = read_text("src", "sql", "01_create_dim_store.sql")
-        self.assertRegex(sql, r"(?s)IF \(\s*SELECT COUNT\(\*\)\s*FROM workspace\.information_schema\.columns"
-                              r".*column_name = 'macro_region'\s*\) = 0 THEN\s*ALTER TABLE")
-        self.assertNotIn("IF NOT EXISTS macro_region", sql)  # not supported by Databricks SQL
+        self.assertIn("CREATE SCHEMA IF NOT EXISTS workspace.test02_warehouse", sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS workspace.test02_warehouse.dim_store", sql)
+        self.assertRegex(sql, r"macro_region STRING NOT NULL")
+        self.assertRegex(sql, r"is_flagship BOOLEAN NOT NULL")
         self.assertFalse(os.path.exists(path("src", "sql", "01a_add_macro_region.sql")))
 
-    def test_populate_fills_macro_region_on_existing_rows(self):
+    def test_populate_corrects_existing_rows(self):
         sql = read_text(*POPULATE_SQL)
-        self.assertRegex(sql, r"WHEN MATCHED AND NOT \(target\.macro_region <=> source\.macro_region\) THEN UPDATE")
+        for col in ("macro_region", "store_name", "is_flagship"):
+            self.assertIn(f"target.{col} <=> source.{col}", sql)
+            self.assertIn(f"target.{col} = source.{col}", sql)
+
+    def test_flagships(self):
+        """IT-MI-001 and US-NY-001 are the two flagships, with their names, everywhere."""
+        names = {"IT-MI-001": "Milan Galleria Vittorio Emanuele", "US-NY-001": "New York Fifth Avenue"}
+        populate, validate = read_text(*POPULATE_SQL), read_text("src", "sql", "03_validate_dim_store.sql")
+        for store_id, name in names.items():
+            self.assertIn(f"WHEN '{store_id}' THEN '{name}'", populate)
+            self.assertIn(f"store_id = '{store_id}' AND store_name = '{name}'", validate)
+            self.assertIn(f"`{store_id}`", read_text(*DOC))
+        self.assertIn("IN ('IT-MI-001', 'US-NY-001') AS is_flagship", populate)
+        self.assertIn("store_ids: IT-MI-001, US-NY-001", read_text("apps", "people_stream", "app", "shop_config.yml"))
+        self.assertIn(("IT", "MI"), {(c, code) for c, code, *_ in _allocation()})
+
+    def test_dimensions_live_in_the_warehouse_schema(self):
+        """Dimensions in test02_warehouse; test02_streaming only for sources and pipeline tables."""
+        import glob
+        files = glob.glob(path("src", "**", "*.*"), recursive=True) + glob.glob(path("apps", "**", "*.*"), recursive=True)
+        for f in files:
+            if f.endswith((".py", ".sql", ".yml", ".yaml")) and "14_drop_old_streaming_dimensions" not in f:
+                text = open(f, encoding="utf-8").read()
+                self.assertNotRegex(text, r"test02_streaming\.dim_", f"{f} still uses a dimension in test02_streaming")
+        for f in ("04_create_simulated_event_source.sql", "12_create_simulated_sales_source.sql"):
+            self.assertIn("workspace.test02_streaming.simulated_", read_text("src", "sql", f))
+        self.assertIn("CREATE SCHEMA IF NOT EXISTS workspace.test02_streaming",
+                      read_text("src", "sql", "04_create_simulated_event_source.sql"))
+        drop = read_text("src", "sql", "14_drop_old_streaming_dimensions.sql")
+        self.assertEqual(re.findall(r"DROP TABLE IF EXISTS (\S+);", drop),
+                         [f"workspace.test02_streaming.dim_{t}" for t in ("client", "product", "store")])
 
     def test_validation_expects_the_generated_totals(self):
         populate = _sql_mapping(read_text(*POPULATE_SQL))

@@ -11,9 +11,9 @@ from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
 import charts
 import shop_config
 import simulator as sim
-import warehouse
+import sql_warehouse
 
-wh = warehouse.Warehouse()
+wh = sql_warehouse.Warehouse()  # Databricks SQL warehouse access (not the data warehouse schema)
 simulation = sim.Simulation(
     load_stores=wh.load_stores,
     load_offsets=wh.load_offsets,
@@ -100,10 +100,26 @@ def chart_card(title, graph_id, figure):
     ], className="mb-3 shadow-sm")
 
 
+def stay_card(avg_stay):
+    return dbc.Card([
+        dbc.CardHeader("Average stay inside a store (exit time - entry time)"),
+        dbc.CardBody(dbc.Row([
+            dbc.Col(dcc.Slider(
+                id="avg-stay", min=sim.AVG_STAY_MIN, max=sim.AVG_STAY_MAX, step=sim.AVG_STAY_STEP, value=avg_stay,
+                marks={v: f"{v} min" for v in range(sim.AVG_STAY_MIN, sim.AVG_STAY_MAX + 1, 20)},
+                tooltip={"placement": "bottom", "always_visible": True, "template": "{value} min"},
+            ), md=8),
+            dbc.Col(html.Div(id="stay-stats", className="small"), md=4),
+        ], className="align-items-center")),
+    ], className="mb-3 shadow-sm")
+
+
 def simulator_tab(n_avg):
     """Controls only: sliders, parameters and stream status. The charts are on the Counters tab."""
-    probs = simulation.snapshot()["purchase_prob"]
+    snapshot = simulation.snapshot()
+    probs = snapshot["purchase_prob"]
     return [
+        stay_card(snapshot["avg_stay"]),
         dbc.Card([
             dbc.CardHeader("Average visitors per store per day (vertical) and purchase probability "
                            "per category (horizontal), by region"),
@@ -157,7 +173,10 @@ def serve_layout():
         html.P("Streams simulated people-counter events into the pipeline's source table. "
                f"24 simulated hours take {CFG.real_seconds_per_sim_day} seconds; stores are open "
                f"{CFG.opening_hour:02d}:00-{CFG.closing_hour:02d}:00 local time, and each person stays inside "
-               f"at most {CFG.max_stay_minutes} minutes ({CFG.max_stay_minutes / 60:g} h). Each run lasts at most "
+               f"at most {CFG.max_stay_minutes} minutes ({CFG.max_stay_minutes / 60:g} h), on average the stay "
+               f"slider's value. {CFG.local_share}% of buyers are local clients, {100 - CFG.local_share}% visitors; "
+               f"the flagships {', '.join(CFG.flagship_ids)} get {CFG.flagship_traffic_pct}% traffic and "
+               f"{CFG.flagship_local_share}% local buyers. Each run lasts at most "
                f"{CFG.max_run_sim_hours} simulated hours ({CFG.max_run_real_seconds:g} seconds); "
                "START always begins a new run and first empties both source tables (people events and sales); "
                "afterwards run the pipeline with a full refresh of all tables.",
@@ -177,6 +196,7 @@ def serve_layout():
         dcc.Store(id="sink-buttons"),
         dcc.Store(id="sink-sliders"),
         dcc.Store(id="sink-probs"),
+        dcc.Store(id="sink-stay"),
         dcc.Store(id="browser-title"),
         dcc.Store(id="chart-version"),
     ], fluid=False)
@@ -199,10 +219,18 @@ def start_stop(_start, _stop):
               Output({"type": "n-avg", "region": sim.REGIONS[1]}, "value"),
               Output({"type": "n-avg", "region": sim.REGIONS[2]}, "value"),
               Output({"type": "prob", "region": ALL, "category": ALL}, "value"),
+              Output("avg-stay", "value"),
               Input("reset", "n_clicks"), prevent_initial_call=True)
 def reset(_):
     probs = [sim.PURCHASE_PROB_DEFAULTS[o["id"]["region"]][o["id"]["category"]] for o in ctx.outputs_list[3]]
-    return [sim.N_AVG_DEFAULTS[r] for r in sim.REGIONS] + [probs]
+    return [sim.N_AVG_DEFAULTS[r] for r in sim.REGIONS] + [probs, sim.AVG_STAY_DEFAULT]
+
+
+@app.callback(Output("sink-stay", "data"), Input("avg-stay", "value"))
+def set_avg_stay(value):
+    if value is not None:
+        simulation.set_avg_stay(value)
+    return simulation.snapshot()["avg_stay"]
 
 
 @app.callback(Output("sink-probs", "data"), Input({"type": "prob", "region": ALL, "category": ALL}, "value"))
@@ -226,15 +254,30 @@ def set_n_avg(*values):
 
 @app.callback(Output("entries-chart", "figure"), Output("exits-chart", "figure"), Output("exit-stats", "children"),
               Output("sales-stats", "children"),
+              Output("stay-stats", "children"),
               Output("chart-version", "data"),
               Input("tick", "n_intervals"), State("chart-version", "data"))
 def refresh_chart(_, version):
     s = simulation.snapshot()
     current = f"{s['run_id']}:{len(s['history'])}"
     if current == version:  # redraw only when a new batch arrived
-        return no_update, no_update, no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update, no_update, no_update
     return (charts.cumulative_entries(s, sim.MAX_RUN_SIM_HOURS), charts.cumulative_exits(s, sim.MAX_RUN_SIM_HOURS),
-            exit_stats(s), sales_stats(s), current)
+            exit_stats(s), sales_stats(s), stay_stats(s), current)
+
+
+def _minutes(value):
+    return "-" if value is None else f"{value:.0f} min"
+
+
+def stay_stats(s):
+    """Measured average stay of the people who left, per region."""
+    window = sim.stay_window(s["avg_stay"])
+    return html.Div([
+        html.Div(f"Stays drawn evenly in {window[0]:.0f}-{window[1]:.0f} min", className="text-muted"),
+        html.Div("Measured: " + ", ".join(f"{REGION_LABEL[r]} {_minutes(s['avg_stay_measured'][r])}"
+                                          for r in sim.REGIONS)),
+    ])
 
 
 @app.callback(Output("daily-chart", "figure"), Input("daily-kind", "value"), Input("chart-version", "data"))
@@ -249,7 +292,8 @@ def sales_stats(s):
                                                        for c in sim.CATEGORIES]
                                 + [html.Th("Transactions", className="text-end"),
                                    html.Th("Amount (EUR)", className="text-end"),
-                                   html.Th("Per person out", className="text-end")]))
+                                   html.Th("Per person out", className="text-end"),
+                                   html.Th("Local clients", className="text-end")]))
     rows = []
     for r in sim.REGIONS:
         x = s["sales"][r]
@@ -258,17 +302,21 @@ def sales_stats(s):
                             + [html.Td(f"{x['by_category'][c]:,}", className="text-end") for c in sim.CATEGORIES]
                             + [html.Td(f"{x['transactions']:,}", className="text-end fw-semibold"),
                                html.Td(f"{x['amount']:,.0f}", className="text-end"),
-                               html.Td(f"{per_person:.1%}", className="text-end")]))
+                               html.Td(f"{per_person:.1%}", className="text-end"),
+                               html.Td(f"{x['local'] / x['transactions']:.0%}" if x["transactions"] else "-",
+                                       className="text-end")]))
     return dbc.Table([header, html.Tbody(rows)], size="sm", responsive=True, className="mb-0")
 
 
 def exit_stats(s):
     header = html.Thead(html.Tr([html.Th("Region"), html.Th("People in", className="text-end"),
                                  html.Th("People out", className="text-end"),
-                                 html.Th("Still inside", className="text-end")]))
+                                 html.Th("Still inside", className="text-end"),
+                                 html.Th("Average stay", className="text-end")]))
     rows = [html.Tr([html.Td(REGION_LABEL[r]), html.Td(f"{s['entries'][r]:,}", className="text-end"),
                      html.Td(f"{s['exits'][r]:,}", className="text-end"),
-                     html.Td(f"{s['entries'][r] - s['exits'][r]:,}", className="text-end")])
+                     html.Td(f"{s['entries'][r] - s['exits'][r]:,}", className="text-end"),
+                     html.Td(_minutes(s["avg_stay_measured"][r]), className="text-end")])
             for r in sim.REGIONS]
     return dbc.Table([header, html.Tbody(rows)], size="sm", className="mb-0")
 

@@ -3,7 +3,9 @@
 Functional description: doc/sales.md. For every person counted in an EXIT event and every merchandise
 category, the person buys one item of that category with probability PURCHASE_PROB[region][category]
 (percent, set by the app's horizontal sliders). Each purchase is one transaction: the store, a registered
-client of the store's country, one product of the category at list price, at the exit's local time.
+client (from the store's country with probability clients.local_share, 70%, otherwise a visitor registered in
+another country; flagships use flagships.local_share, 30%), one product of the category at list price, at
+the exit's local time.
 """
 import json
 import math
@@ -40,8 +42,10 @@ class Catalog:
         if empty:
             raise ValueError(f"no products in categories {empty}: run src/sql/11_populate_dim_product.sql")
         self.clients_by_country = defaultdict(list)
+        self.all_clients = []  # (client_id, country_code), for visitors
         for client_id, country_code in clients:
             self.clients_by_country[country_code].append(client_id)
+            self.all_clients.append((client_id, country_code))
         if not self.clients_by_country:
             raise ValueError("no clients: run src/sql/09_populate_dim_client.sql")
 
@@ -61,9 +65,13 @@ def binomial(n, p, rng):
 class SalesGenerator:
     """Second simulator on the same timeline: reads each batch of people rows, emits sales rows."""
 
-    def __init__(self, catalog, store_country, next_offsets=None, run_id="run", seed=None):
+    def __init__(self, catalog, store_country, next_offsets=None, run_id="run", seed=None,
+                 local_share=100, flagship_ids=(), flagship_local_share=100):
         self.catalog = catalog
         self.store_country = store_country  # {store_id: country_code}
+        self.local_share = local_share  # percent of buyers from the store's country
+        self.flagship_ids = frozenset(flagship_ids)
+        self.flagship_local_share = flagship_local_share
         self.next_offset = {p: (next_offsets or {}).get(p, 1) for p in PARTITION.values()}
         self.run_id = run_id
         self.rng = random.Random(seed)
@@ -76,16 +84,27 @@ class SalesGenerator:
             if event["event_type"] != "EXIT":
                 continue
             region = REGIONS[row["source_partition"]]
-            clients = self.catalog.clients_by_country.get(self.store_country.get(event["store_id"]))
-            if not clients:
+            country = self.store_country.get(event["store_id"])
+            if not self.catalog.clients_by_country.get(country):
                 raise ValueError(f"no registered clients for the country of store {event['store_id']}")
+            share = self.flagship_local_share if event["store_id"] in self.flagship_ids else self.local_share
             for category in CATEGORIES:
                 buyers = binomial(event["people_count"], prob_by_region[region][category] / 100, self.rng)
                 for _ in range(buyers):
-                    rows.append(self._transaction(row, event, region, category, clients))
+                    rows.append(self._transaction(row, event, region, category, self._client(country, share)))
         return rows
 
-    def _transaction(self, row, event, region, category, clients):
+    def _client(self, country, local_share):
+        """A local client with probability local_share percent, otherwise a visitor from another country."""
+        local = self.catalog.clients_by_country[country]
+        if self.rng.random() * 100 < local_share or len(local) == len(self.catalog.all_clients):
+            return self.rng.choice(local)
+        while True:  # other countries hold most clients, so this ends after a draw or two
+            client_id, client_country = self.rng.choice(self.catalog.all_clients)
+            if client_country != country:
+                return client_id
+
+    def _transaction(self, row, event, region, category, client_id):
         product = self.rng.choice(self.catalog.products_by_category[category])
         partition = PARTITION[region]
         offset = self.next_offset[partition]
@@ -94,7 +113,7 @@ class SalesGenerator:
             "transaction_id": f"tx-{self.run_id}-{partition}-{offset:010d}",
             "exit_event_id": event["event_id"],
             "store_id": event["store_id"],
-            "client_id": self.rng.choice(clients),
+            "client_id": client_id,
             "product_id": product.product_id,
             "category": category,
             "quantity": 1,

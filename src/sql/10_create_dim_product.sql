@@ -1,14 +1,14 @@
 
 -- ============================================================
 -- 10 - Create product dimension
--- Target: workspace.test02_streaming.dim_product
+-- Target: workspace.test02_warehouse.dim_product
 --
 -- Products identified by their natural product_id (no surrogate
 -- key). Rules: doc/product.md.
 -- Idempotent. Then run 11_populate_dim_product.sql.
 -- ============================================================
 
-CREATE TABLE IF NOT EXISTS workspace.test02_streaming.dim_product
+CREATE TABLE IF NOT EXISTS workspace.test02_warehouse.dim_product
 (
     product_id STRING NOT NULL
         COMMENT 'Natural product identifier (SKU), <category code>-<4-digit number>, e.g. SH-0001; primary key',

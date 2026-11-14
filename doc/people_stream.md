@@ -31,7 +31,12 @@ Every store and simulation parameter is in `apps/people_stream/app/shop_config.y
 | Key | Shipped value | Meaning |
 |---|---|---|
 | `stores.opening_hour`, `stores.closing_hour` | 10, 20 | Opening hours, each store's local time |
-| `stores.max_stay_minutes` | 90 | Longest a person stays inside (1.5 h); each stay is drawn evenly between 0 and this, and ends by closing. Shown on the Simulator tab (intro line and Parameters panel). See §5 |
+| `stores.max_stay_minutes` | 90 | Longest a person stays inside (1.5 h); every stay also ends by closing. Shown on the Simulator tab (intro line and Parameters panel). See §5 |
+| `avg_stay_minutes.default`, `.min`, `.max`, `.step` | 45, 5, 85, 5 | Average stay inside a store (exit time − entry time, as the sensors register it): start value and range of the stay slider. `max` must be below `stores.max_stay_minutes`. See §5 |
+| `clients.local_share` | 70 | Percent of buyers registered in the store's country; the other 30% are visitors from other countries. See `client.md` §4 |
+| `flagships.store_ids` | `IT-MI-001, US-NY-001` | The flagship stores (Milan Galleria Vittorio Emanuele, New York Fifth Avenue), `dataset.md` §2.5 |
+| `flagships.traffic_pct` | 145 | Entering people at flagships, percent of the region's N_AVG_PEOPLE (+45%) |
+| `flagships.local_share` | 30 | Percent of local buyers at flagships (70% visitors, the inverse of the other stores) |
 | `n_avg_people.default.EUROPE` / `.AMERICAS` / `.ASIA` | 3000 each | `N_AVG_PEOPLE_EUROPE`, `_AMERICA`, `_ASIA`: average visitors per store per simulated day; slider start values and **Reset to defaults** |
 | `n_avg_people.min`, `.max`, `.step` | 2000, 6000, 100 | Slider range |
 | `purchase_prob.default.<REGION>.<CATEGORY>` | SHOES 5, BAGS 2, READY_TO_WEAR 6, ACCESSORIES 3, TRAVEL 2, SUNGLASSES 2 (every region) | PURCHASE_PROB, percent: chance that a person leaving buys one item of the category; horizontal slider start values. See `sales.md` §3 |
@@ -40,7 +45,7 @@ Every store and simulation parameter is in `apps/people_stream/app/shop_config.y
 | `simulation.max_run_sim_hours` | 48 | Longest run (= 480 real seconds with a 240 s day) |
 | `simulation.tick_seconds` | 5 | Real seconds between batches (= 30 simulated minutes with a 240 s day) |
 
-**Format:** nested `key: value` lines with two-space indents, whole numbers only, `#` comments. The app refuses to start, with the reason in its log, if the file has an unknown or missing key, a value that isn't a whole number, closing before opening, a default outside the slider range or off its step grid, or a batch longer than a run.
+**Format:** nested `key: value` lines with two-space indents, whole numbers (or, for `store_ids`, a comma-separated list of store ids), `#` comments. The app refuses to start, with the reason in its log, if the file has an unknown or missing key, a value that isn't a whole number, closing before opening, a default outside the slider range or off its step grid, or a batch longer than a run.
 
 The rest of this page quotes the shipped values. `dataset.md` §4 and §5 describe the same assumptions for the data as a whole.
 
@@ -53,14 +58,15 @@ The screen has a header, always visible, and two tabs: **Simulator** (controls) 
 | **START** | Starts a new run from scratch: first **empties both source tables** (`simulated_event_source` and `simulated_sales_source`, see §7), then reads the stores and sets the simulated clock to the current time. The run lasts at most 48 simulated hours (480 s). Disabled while running |
 | **STOP** | Ends the run: the generator stops at once (state `STOPPING`); batches already generated are still written (state `WRITING`), then the state becomes `STOPPED`. The screen never waits for the writes. Disabled while stopped |
 | **Three vertical sliders (equalizer)** | `N_AVG_PEOPLE_EUROPE`, `N_AVG_PEOPLE_AMERICA`, `N_AVG_PEOPLE_ASIA`: average visitors per store per simulated day. Range 2000–6000, step 100, default 3000 (from `shop_config.yml`). A change applies from the next batch, also while running |
+| **Average stay slider** | At the top of the Simulator tab: the average stay inside a store, 5–85 minutes, step 5, default 45. Next to it, the window stays are drawn from and the **measured** average stay per region (estimated from the people who left). A change applies to people entering from the next batch |
 | **PURCHASE_PROB sliders** | Under each region's vertical slider, six horizontal sliders, one per merchandise category, 0–100%. See `sales.md` §3 |
-| **Reset to defaults** | Puts all sliders back to `n_avg_people.default` and `purchase_prob.default` |
+| **Reset to defaults** | Puts all sliders back to `n_avg_people.default`, `purchase_prob.default` and `avg_stay_minutes.default` |
 | **Parameters** | The values read from `shop_config.yml`, with what each means |
 | **Headline time** | Next to the title, while a run is `RUNNING`: the simulated UTC time rounded down to the hour, e.g. `2026-11-14 07:00 UTC`. Hidden otherwise |
 | **Browser tab title** | `People stream simulator`; while a run is `RUNNING`, followed by the simulated hour, e.g. `People stream simulator · 2026-11-14 07:00 UTC`. It changes once per simulated hour and never shows "Updating..." |
 | **Tabs** | **Simulator**: sliders, parameters and stream status; no charts. **Counters**: the in/out table, people per calendar date, and the cumulative people-out and people-in charts. START, STOP and the headline sit above the tabs |
-| **Sales transactions by region and category** (Counters tab) | Per region: transactions per category, total, amount in EUR, transactions per person out. See `sales.md` §8 |
-| **In, out and still inside** (Counters tab) | Per region: people in (sum of `ENTRY`), people out (sum of `EXIT`) and their difference, the people still inside open stores |
+| **Sales transactions by region and category** (Counters tab) | Per region: transactions per category, total, amount in EUR, transactions per person out, share of local clients. See `sales.md` §8 |
+| **In, out and still inside** (Counters tab) | Per region: people in (sum of `ENTRY`), people out (sum of `EXIT`), their difference (the people still inside open stores), and the measured average stay |
 | **People per calendar date** (Counters tab) | Bar chart: for each calendar date, one bar per region (grouped side by side) with the sum of `people_count` on that date. The date is the store's local date (from `event_timestamp`), the same day the in/out balance uses. A switch picks **People out (EXIT)** (default) or **People in (ENTRY)**. Each bar is that date's total, not a running total. The first and last dates of a run are partial, because the run starts and ends mid-day |
 | **Cumulative people-in chart** (Counters tab) | One line per region, the running sum of `people_count` of the region's `ENTRY` events since START (y), against simulated UTC time (x). The x axis always spans the run's 48 simulated hours from START, so the lines grow left to right; one point per batch (at most 97). Colors are fixed per region (Europe blue, Americas orange, Asia aqua), with a legend, a label at each line's end, and a shared hover tooltip. The chart keeps the last run until the next START |
 | **Cumulative people-out chart** (Counters tab) | The same chart for `EXIT` events: the running sum of `people_count` of the region's `EXIT` events since START (y) against simulated UTC time (x), over the run's 48 hours, same colors, legend, end labels and hover. Exits follow entries during the day and catch up at each store's 20:00 closing, so the lines climb in steps when a region closes |
@@ -86,9 +92,9 @@ There is one simulation per app, shared by everyone who opens it: a second viewe
 Each store runs its own stream, 24 simulated hours a day:
 
 1. **Opening hours:** events only between **10:00 and 20:00 local time**. Across the three macro regions some store is open at every UTC hour (see `dataset.md` §4), so the app writes around the clock.
-2. **Entries:** for the open minutes of a batch, the number of people entering is drawn from a Poisson distribution with mean `N_AVG_PEOPLE_<region> × open minutes / 600`. With the default that's 150 per store per 30-minute batch.
-3. **Stay:** each person stays inside a time drawn evenly between 0 and `stores.max_stay_minutes` (**90 minutes**, 45 on average), and leaves at entry time + stay, or just before 20:00 if that comes first. Nobody stays longer than 1.5 hours.
-4. **Exits:** in each batch, the people whose leave time falls in the batch leave. The simulator handles the people of one `ENTRY` event together: per batch it draws how many of them leave, from the share of their 0–90-minute window (cut at closing) that the batch covers.
+2. **Entries:** for the open minutes of a batch, the number of people entering is drawn from a Poisson distribution with mean `N_AVG_PEOPLE_<region> × open minutes / 600`. With the default that's 150 per store per 30-minute batch. The two flagships use 145% of their region's N_AVG_PEOPLE (`flagships.traffic_pct`).
+3. **Stay:** each person stays inside a time drawn evenly from a window whose mean is the **average stay slider** value A and which never goes beyond `stores.max_stay_minutes` (90): `0` to `2A` when A ≤ 45 (default 45: 0–90 minutes), `2A − 90` to `90` when A > 45 (e.g. 60: 30–90). They leave at entry time + stay, or just before 20:00 if that comes first. Nobody stays longer than 1.5 hours; closing shortens the stays of late entrants a little, so the measured average can be slightly below A.
+4. **Exits:** in each batch, the people whose leave time falls in the batch leave. The simulator handles the people of one `ENTRY` event together: per batch it draws how many of them leave, from the share of their stay window (cut at closing) that the batch covers. The window is fixed when they enter, so a slider change applies to people entering afterwards.
 5. **Closing:** everyone's leave time is before 20:00 local, so a store is empty at closing and entries and exits balance every day.
 6. **Events:** per store and batch, at most one `ENTRY` and one `EXIT` event, whose `people_count` is the number of people; batches with zero people emit nothing. The `ENTRY` time is a random moment within the open part of the batch; the `EXIT` time is the latest moment within the batch at which its people can have left. Both are in local time.
 
@@ -145,10 +151,10 @@ A run can end while some stores are open: their last `ENTRY` events have no matc
 
 | Step | How |
 |---|---|
-| Before the first deploy | In the pipeline bundle, run `src/sql/01_…`, `02_…` (stores with `macro_region`), `04_…` (source table) and `08_…` to `12_…` (clients, products, sales source). The app's permissions are granted on these tables, so they must exist |
+| Before the first deploy | In the pipeline bundle, run `src/sql/01_…`, `02_…` (stores, in `test02_warehouse`), `04_…` (source table, in `test02_streaming`) and `08_…` to `12_…` (clients, products, sales source). See [`warehouse.md`](warehouse.md) §4. The app's permissions are granted on these tables, so they must exist |
 | Check | `databricks bundle validate --strict -t dev --profile MPiunti`, from `apps/people_stream/` |
 | Deploy | From `apps/people_stream/`: `databricks bundle deploy -t dev --profile MPiunti`, then `databricks bundle run people_stream -t dev --profile MPiunti` to start the app; or, in the workspace Git folder, open `apps/people_stream/` and use **Deployments** |
-| Granted to the app | `CAN_USE` on the warehouse; `SELECT` on `dim_store`, `dim_client` and `dim_product`; `SELECT` and `MODIFY` on `simulated_event_source` and `simulated_sales_source` (`MODIFY` also covers emptying them at START) |
+| Granted to the app | `CAN_USE` on the SQL warehouse; `SELECT` on `test02_warehouse.dim_store`, `dim_client` and `dim_product`; `SELECT` and `MODIFY` on `simulated_event_source` and `simulated_sales_source` (`MODIFY` also covers emptying them at START) |
 | Stop paying for it | Stop the app under **Compute → Apps**; STOP alone only stops the simulation |
 
 The pipeline bundle doesn't upload `apps/` (`sync.exclude` in the root `databricks.yml`), and the app bundle has its own state, so deploying one never changes the other.

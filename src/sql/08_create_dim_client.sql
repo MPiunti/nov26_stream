@@ -1,14 +1,14 @@
 
 -- ============================================================
 -- 08 - Create client dimension
--- Target: workspace.test02_streaming.dim_client
+-- Target: workspace.test02_warehouse.dim_client
 --
 -- Registered clients, identified by their natural client_id
 -- (no surrogate key). Rules: doc/client.md.
 -- Idempotent. Then run 09_populate_dim_client.sql.
 -- ============================================================
 
-CREATE TABLE IF NOT EXISTS workspace.test02_streaming.dim_client
+CREATE TABLE IF NOT EXISTS workspace.test02_warehouse.dim_client
 (
     client_id STRING NOT NULL
         COMMENT 'Natural, personal identifier of the registered client, e.g. CL-IT-0000001; primary key',

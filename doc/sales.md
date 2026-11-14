@@ -2,7 +2,7 @@
 
 Functional reference for the sales transactions: how the people-stream app turns people leaving a store into purchases, what a transaction contains, the natural keys it references, and where it is written.
 
-The people flow it builds on is in [`people_stream.md`](people_stream.md); stores in [`dataset.md`](dataset.md); clients in [`client.md`](client.md); products in [`product.md`](product.md).
+The people flow it builds on is in [`people_stream.md`](people_stream.md); stores in [`dataset.md`](dataset.md); clients in [`client.md`](client.md); products in [`product.md`](product.md); schemas and keys in [`warehouse.md`](warehouse.md).
 
 ## 1. Purpose and boundaries
 
@@ -24,7 +24,7 @@ The people flow it builds on is in [`people_stream.md`](people_stream.md); store
 
 ## 2. Data model
 
-All keys are **natural keys**; there are no surrogate keys. Every reference uses the referenced table's natural primary key.
+All keys are **natural keys**; there are no surrogate keys. Every reference uses the referenced table's natural primary key. The dimensions are in `test02_warehouse`, the sales source in `test02_streaming` ([`warehouse.md`](warehouse.md)).
 
 | Table | Grain | Primary key | References |
 |---|---|---|---|
@@ -60,7 +60,7 @@ For every `EXIT` event of a batch, with `people_count = N`, in a store of region
 
 1. **Buyers per category:** for each category C, the number of buyers is drawn from a binomial distribution: N people, each buying with probability `PURCHASE_PROB[R][C] / 100`.
 2. **One transaction per buyer:** for each buyer:
-   - **Client:** one registered client of the store's country, drawn uniformly from `dim_client` (`client.md` §4).
+   - **Client:** a local client (registered in the store's country) with probability `clients.local_share` = **70%**, otherwise a visitor registered in another country; at the two flagships the shares are inverted, **30% local, 70% visitors** (`client.md` §4).
    - **Product:** one product of category C, drawn uniformly from `dim_product` (`product.md` §4).
    - **Quantity and amount:** 1 unit at the product's `list_price`, in EUR.
    - **Time:** the exit's local `event_timestamp`.
@@ -83,7 +83,7 @@ Payload (`raw_event`), one JSON object per transaction:
 | `transaction_id` | `tx-<run id>-<partition>-<offset, 10 digits>`; unique across runs. The natural key of a transaction |
 | `exit_event_id` | `event_id` of the `EXIT` that triggered it; several transactions can share one exit |
 | `store_id` | The exit's store → `dim_store.store_id` |
-| `client_id` | → `dim_client.client_id`; same country as the store |
+| `client_id` | → `dim_client.client_id`; from the store's country for 70% of transactions (30% at flagships), from another country otherwise |
 | `product_id` | → `dim_product.product_id`; of `category` |
 | `category` | The product's category |
 | `quantity` | 1 |
@@ -121,12 +121,12 @@ Transactions follow the exits, so they peak when a region's stores close at 20:0
 ## 8. On screen
 
 - **Simulator tab:** the 18 horizontal PURCHASE_PROB sliders (§3); the **Parameters** panel shows their defaults and range.
-- **Counters tab:** **Sales transactions by region and category**: transactions per category, total transactions, amount in EUR, and transactions per person out.
+- **Counters tab:** **Sales transactions by region and category**: transactions per category, total transactions, amount in EUR, local clients' share, and transactions per person out.
 
 ## 9. Setup and permissions
 
 | Step | How |
 |---|---|
 | Tables | In the pipeline bundle, run `src/sql/08_…` to `11_…` (clients and products), `12_…` (sales source), then check with `13_…`. See `client.md` §5 and `product.md` §5 |
-| Granted to the app | `SELECT` on `dim_client` and `dim_product`; `SELECT` and `MODIFY` on `simulated_sales_source` (`apps/people_stream/resources/people_stream.app.yml`). The tables must exist before the app bundle is deployed |
+| Granted to the app | `SELECT` on `test02_warehouse.dim_client` and `dim_product`; `SELECT` and `MODIFY` on `simulated_sales_source` (`apps/people_stream/resources/people_stream.app.yml`). The tables must exist before the app bundle is deployed |
 | App settings | `CLIENT_TABLE`, `PRODUCT_TABLE`, `SALES_TABLE` in `apps/people_stream/app/app.yaml` |

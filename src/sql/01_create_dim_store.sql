@@ -1,18 +1,18 @@
 
 -- ============================================================
--- 01 - Create Silver store dimension
--- Target: workspace.test02_streaming.dim_store
+-- 01 - Create the warehouse schema and the store dimension
+-- Target: workspace.test02_warehouse.dim_store
 --
--- Idempotent: creates the schema and table if missing, and adds
--- macro_region to a table created before it existed. Safe to rerun.
--- Then run 02_populate_dim_store.sql.
+-- test02_warehouse holds the dimensions (natural keys only);
+-- test02_streaming holds the streaming sources and pipeline tables.
+-- See doc/warehouse.md. Idempotent. Then run 02_populate_dim_store.sql.
 -- ============================================================
 
-CREATE SCHEMA IF NOT EXISTS workspace.test02_streaming
-COMMENT 'Silver layer for retail streaming data';
+CREATE SCHEMA IF NOT EXISTS workspace.test02_warehouse
+COMMENT 'Data warehouse dimensions (stores, clients, products), natural keys only';
 
 
-CREATE TABLE IF NOT EXISTS workspace.test02_streaming.dim_store
+CREATE TABLE IF NOT EXISTS workspace.test02_warehouse.dim_store
 (
     store_id STRING NOT NULL
         COMMENT 'Natural business identifier of the store; primary key',
@@ -32,8 +32,11 @@ CREATE TABLE IF NOT EXISTS workspace.test02_streaming.dim_store
     region STRING
         COMMENT 'State, province or administrative region',
 
-    macro_region STRING
+    macro_region STRING NOT NULL
         COMMENT 'Macro region derived from country_code: EUROPE, AMERICAS or ASIA',
+
+    is_flagship BOOLEAN NOT NULL
+        COMMENT 'Flagship store: more traffic and more visitors from abroad (doc/dataset.md)',
 
     timezone_id STRING NOT NULL
         COMMENT 'IANA timezone identifier',
@@ -51,22 +54,4 @@ CREATE TABLE IF NOT EXISTS workspace.test02_streaming.dim_store
         PRIMARY KEY (store_id)
 )
 USING DELTA
-COMMENT 'Silver dimension containing global retail store master data';
-
-
--- Upgrade a dim_store created before macro_region existed.
--- ADD COLUMN IF NOT EXISTS isn't supported, so check information_schema first.
-BEGIN
-    IF (
-        SELECT COUNT(*)
-        FROM workspace.information_schema.columns
-        WHERE table_schema = 'test02_streaming'
-          AND table_name = 'dim_store'
-          AND column_name = 'macro_region'
-    ) = 0 THEN
-        ALTER TABLE workspace.test02_streaming.dim_store
-        ADD COLUMN macro_region STRING
-            COMMENT 'Macro region derived from country_code: EUROPE, AMERICAS or ASIA'
-            AFTER region;
-    END IF;
-END;
+COMMENT 'Store dimension: global retail store master data; natural key store_id';

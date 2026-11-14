@@ -4,6 +4,10 @@
 -- Purpose: decouple pipeline development from Event Hubs
 -- ============================================================
 
+CREATE SCHEMA IF NOT EXISTS workspace.test02_streaming
+COMMENT 'Streaming layer: simulated sources and the bronze, silver and quarantine streaming tables';
+
+
 CREATE TABLE IF NOT EXISTS
     workspace.test02_streaming.simulated_event_source
 (

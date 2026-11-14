@@ -7,6 +7,7 @@ Entry point for AI agents working on this project. Start here, then read the pag
 | Topic | Page | Read it before |
 |---|---|---|
 | **Project rules** | [`readme.md`](readme.md) | Any change: layout, workspace, tools, pipeline data flow, validation rules, working rules, tests |
+| **Data warehouse** | [`doc/warehouse.md`](doc/warehouse.md) | Touching schemas, tables or keys: `test02_warehouse` (dimensions) vs `test02_streaming` (streaming tables), natural keys, loading order. Start here for any data change |
 | **Dataset** | [`doc/dataset.md`](doc/dataset.md) | Touching stores, events or volumes: the store dimension and its distribution, macro regions, how people-counter events are streamed in, opening hours, the `N_AVG_PEOPLE_*` parameters |
 | **Sales** | [`doc/sales.md`](doc/sales.md) | Touching the sales simulator, PURCHASE_PROB, transactions or the sales source table |
 | **Clients** | [`doc/client.md`](doc/client.md) | Touching `dim_client` or how buyers are chosen |

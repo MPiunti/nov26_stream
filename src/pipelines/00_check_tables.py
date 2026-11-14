@@ -14,7 +14,7 @@ REQUIRED_TABLES = {
     "workspace.test02_streaming.simulated_event_source": (
         "src/sql/04_create_simulated_event_source.sql", False
     ),
-    "workspace.test02_streaming.dim_store": (
+    "workspace.test02_warehouse.dim_store": (
         "src/sql/01_create_dim_store.sql and 02_populate_dim_store.sql", True
     ),
 }

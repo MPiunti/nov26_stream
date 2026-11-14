@@ -13,7 +13,7 @@ from pyspark.sql.types import (
 # ============================================================
 
 BRONZE_TABLE = "workspace.test02_streaming.bronze_people_counter_events"
-STORE_TABLE = "workspace.test02_streaming.dim_store"
+STORE_TABLE = "workspace.test02_warehouse.dim_store"
 
 
 EVENT_SCHEMA = StructType([
@@ -78,7 +78,7 @@ SILVER_SCHEMA = """
 
     CONSTRAINT fk_silver_people_counter_store
         FOREIGN KEY (store_id)
-        REFERENCES workspace.test02_streaming.dim_store(store_id)
+        REFERENCES workspace.test02_warehouse.dim_store(store_id)
 """
 
 

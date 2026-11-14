@@ -6,8 +6,9 @@ with the shipped values:
 - On START the simulated clock starts at the current real UTC time; each store sees it in its own time zone.
 - Each store is its own stream. It emits events only while open, 10:00-20:00 local time.
 - Visitors per store per simulated day average N_AVG_PEOPLE of the store's macro region.
-- Each person stays inside at most 1.5 hours: the stay is drawn evenly between 0 and max_stay_minutes,
-  and everyone leaves by closing time.
+- Each person stays inside at most 1.5 hours, on average the stay slider's value (default 45 min): the
+  stay is drawn evenly in a window centred on that average, and everyone leaves by closing time.
+- Flagship stores get flagships.traffic_pct (145%) of their region's N_AVG_PEOPLE.
 - Each tick (5 real seconds = 30 simulated minutes) emits, per open store, at most one ENTRY
   and one EXIT event whose people_count totals the people who came in and went out in that window.
 - A run lasts at most 48 simulated hours (480 real seconds), then the generator stops (FINISHED).
@@ -36,6 +37,10 @@ OPEN_HOUR, CLOSE_HOUR = CONFIG.opening_hour, CONFIG.closing_hour
 OPEN_MINUTES = (CLOSE_HOUR - OPEN_HOUR) * 60
 MAX_STAY_MINUTES = CONFIG.max_stay_minutes
 MAX_STAY = timedelta(minutes=MAX_STAY_MINUTES)
+AVG_STAY_DEFAULT = CONFIG.avg_stay_default
+AVG_STAY_MIN, AVG_STAY_MAX, AVG_STAY_STEP = CONFIG.avg_stay_min, CONFIG.avg_stay_max, CONFIG.avg_stay_step
+FLAGSHIP_IDS = frozenset(CONFIG.flagship_ids)
+FLAGSHIP_TRAFFIC = CONFIG.flagship_traffic_pct / 100
 
 REGIONS = shop_config.REGIONS
 N_AVG_DEFAULTS = dict(CONFIG.n_avg_default)
@@ -60,6 +65,19 @@ class Store:
         return f"PC-{self.store_id.split('-')[1]}-01"
 
 
+def stay_window(avg_minutes):
+    """(shortest, longest) stay in minutes: an even spread with mean avg_minutes, never beyond MAX_STAY."""
+    if avg_minutes <= MAX_STAY_MINUTES / 2:
+        return 0.0, 2.0 * avg_minutes
+    return 2.0 * avg_minutes - MAX_STAY_MINUTES, float(MAX_STAY_MINUTES)
+
+
+def clamp_avg_stay(value):
+    """Slider value -> valid average stay in minutes: within [AVG_STAY_MIN, AVG_STAY_MAX], on the step grid."""
+    value = AVG_STAY_MIN + int(round((float(value) - AVG_STAY_MIN) / AVG_STAY_STEP)) * AVG_STAY_STEP
+    return max(AVG_STAY_MIN, min(AVG_STAY_MAX, value))
+
+
 @dataclass
 class StoreStream:
     """One store's stream: it carries the people still inside between ticks.
@@ -69,6 +87,8 @@ class StoreStream:
     store: Store
     tz: ZoneInfo = field(init=False)
     cohorts: list = field(default_factory=list)
+    stay_minutes: float = 0.0  # estimated total stay of the people who left (for the measured average)
+    people_left: int = 0
 
     def __post_init__(self):
         self.tz = ZoneInfo(self.store.timezone_id)
@@ -80,20 +100,28 @@ class StoreStream:
 
 @dataclass
 class Cohort:
-    """The people of one ENTRY event. Each stays a time drawn evenly in [0, MAX_STAY], cut at closing."""
+    """The people of one ENTRY event. Each stays a time drawn evenly in [shortest, longest], cut at closing."""
     entered: datetime  # store local time
     closing: datetime  # last moment before closing, same day
     inside: int
+    shortest: timedelta = timedelta(0)
+    longest: timedelta = MAX_STAY
     left_share: float = 0.0  # share of the cohort's leave times already past
 
     def latest_leave(self):
-        return min(self.entered + MAX_STAY, self.closing)
+        return min(self.entered + self.longest, self.closing)
+
+    def leave_time_at(self, share):
+        """Leave time of the person at this share of the cohort (no closing cut)."""
+        return self.entered + self.shortest + (self.longest - self.shortest) * share
 
     def share_left_by(self, local_time):
         """Share of the cohort whose leave time is before local_time (uniform stay, everyone out by closing)."""
         if local_time > self.closing:
             return 1.0
-        return min(1.0, max(0.0, (local_time - self.entered) / MAX_STAY))
+        if self.longest <= self.shortest:
+            return 1.0 if local_time >= self.entered + self.longest else 0.0
+        return min(1.0, max(0.0, (local_time - self.entered - self.shortest) / (self.longest - self.shortest)))
 
 
 def browser_title(snapshot, app_title):
@@ -197,12 +225,12 @@ def _random_time(windows, minutes, rng):
     return windows[-1][1] - timedelta(milliseconds=1)
 
 
-def store_tick(stream, sim_from_utc, sim_to_utc, n_avg, rng):
+def store_tick(stream, sim_from_utc, sim_to_utc, n_avg, rng, avg_stay=None):
     """Events of one store for the simulated window [sim_from_utc, sim_to_utc).
 
     Returns [(event_type, people_count, local_timestamp)], at most one ENTRY and one EXIT.
-    Each person who enters stays a time drawn evenly in [0, MAX_STAY] and leaves at entry + stay, or just
-    before closing if that comes first. Per cohort (one ENTRY event), the people leaving in the window are
+    Each person who enters stays a time drawn evenly in stay_window(avg_stay) (mean avg_stay, at most
+    MAX_STAY) and leaves at entry + stay, or just before closing if that comes first. Per cohort (one ENTRY event), the people leaving in the window are
     drawn from the share of its leave times that fall in the window. The EXIT event counts everyone leaving
     in the window and carries the latest moment they can have left.
     """
@@ -217,10 +245,13 @@ def store_tick(stream, sim_from_utc, sim_to_utc, n_avg, rng):
             entered = _random_time(windows, minutes, rng)
             events.append(("ENTRY", entries, entered))
             closing = entered.replace(hour=CLOSE_HOUR, minute=0, second=0, microsecond=0) - timedelta(milliseconds=1)
-            stream.cohorts.append(Cohort(entered, closing, entries))
+            shortest, longest = stay_window(AVG_STAY_DEFAULT if avg_stay is None else avg_stay)
+            stream.cohorts.append(Cohort(entered, closing, entries, timedelta(minutes=shortest),
+                                         timedelta(minutes=longest)))
     left, last = 0, None
     for cohort in stream.cohorts:
         share = cohort.share_left_by(local_to)
+        earliest = max(local_from, min(cohort.leave_time_at(cohort.left_share), cohort.closing))
         if share >= 1:
             leaving = cohort.inside
         else:
@@ -231,6 +262,9 @@ def store_tick(stream, sim_from_utc, sim_to_utc, n_avg, rng):
             left += leaving
             moment = min(local_to - timedelta(milliseconds=1), cohort.latest_leave())
             last = moment if last is None else max(last, moment)
+            # They left between `earliest` and `moment`: count the midpoint for the measured average stay.
+            stream.stay_minutes += leaving * ((earliest + (moment - earliest) / 2) - cohort.entered).total_seconds() / 60
+            stream.people_left += leaving
     stream.cohorts = [c for c in stream.cohorts if c.inside > 0]
     if left:
         events.append(("EXIT", left, last))
@@ -246,12 +280,13 @@ class Generator:
         self.run_id = run_id or uuid.uuid4().hex[:8]
         self.rng = random.Random(seed)
 
-    def tick(self, sim_from_utc, sim_to_utc, n_avg_by_region):
+    def tick(self, sim_from_utc, sim_to_utc, n_avg_by_region, avg_stay=None):
         rows = []
         for stream in self.streams:
             region = stream.store.macro_region
+            n_avg = n_avg_by_region[region] * (FLAGSHIP_TRAFFIC if stream.store.store_id in FLAGSHIP_IDS else 1)
             for event_type, count, local_ts in store_tick(
-                    stream, sim_from_utc, sim_to_utc, n_avg_by_region[region], self.rng):
+                    stream, sim_from_utc, sim_to_utc, n_avg, self.rng, avg_stay):
                 partition = PARTITION[region]
                 offset = self.next_offset[partition]
                 self.next_offset[partition] += 1
@@ -271,6 +306,14 @@ class Generator:
                     "source_timestamp": sim_to_utc,
                 })
         return rows
+
+    def measured_stay(self):
+        """Average stay in minutes of the people who left so far, per region (None before anyone left)."""
+        total, people = {r: 0.0 for r in REGIONS}, {r: 0 for r in REGIONS}
+        for stream in self.streams:
+            total[stream.store.macro_region] += stream.stay_minutes
+            people[stream.store.macro_region] += stream.people_left
+        return {r: round(total[r] / people[r], 1) if people[r] else None for r in REGIONS}
 
     def open_stores(self, sim_utc):
         counts = {r: 0 for r in REGIONS}
@@ -305,6 +348,7 @@ class Simulation:
         self._thread = None
         self.n_avg = dict(N_AVG_DEFAULTS)
         self.purchase_prob = {r: dict(PURCHASE_PROB_DEFAULTS[r]) for r in REGIONS}
+        self.avg_stay = AVG_STAY_DEFAULT
         self._reset_status()
 
     def _reset_status(self):
@@ -319,15 +363,21 @@ class Simulation:
                        # Cumulative people_count of ENTRY and of EXIT events per region, one point per batch.
                        "history": [],
                        # Sales so far: per region, transactions, amount (EUR) and transactions per category.
-                       "sales": {r: {"transactions": 0, "amount": 0.0, "by_category": {c: 0 for c in CATEGORIES}}
-                                 for r in REGIONS},
+                       "sales": {r: {"transactions": 0, "amount": 0.0, "local": 0,
+                                     "by_category": {c: 0 for c in CATEGORIES}} for r in REGIONS},
                        "sales_rows_written": 0, "sources_cleared": False,
                        # Batches generated but not yet written to the warehouse.
-                       "pending_batches": 0}
+                       "pending_batches": 0,
+                       # Measured average stay (minutes) of the people who left, per region.
+                       "avg_stay_measured": {r: None for r in REGIONS}}
 
     def set_purchase_prob(self, region, category, value):
         with self._lock:
             self.purchase_prob[region][category] = clamp_prob(value)
+
+    def set_avg_stay(self, value):
+        with self._lock:
+            self.avg_stay = clamp_avg_stay(value)
 
     def set_n_avg(self, region, value):
         with self._lock:
@@ -369,7 +419,9 @@ class Simulation:
             seller = None
             if self._load_catalog is not None:
                 seller = sales.SalesGenerator(self._load_catalog(), {s.store_id: s.store_id[:2] for s in stores},
-                                              self._load_sales_offsets(), run_id=generator.run_id)
+                                              self._load_sales_offsets(), run_id=generator.run_id,
+                                              local_share=CONFIG.local_share, flagship_ids=FLAGSHIP_IDS,
+                                              flagship_local_share=CONFIG.flagship_local_share)
             start_real, start_utc = self._clock(), self._now()
             end_utc = start_utc + timedelta(hours=MAX_RUN_SIM_HOURS)
             with self._lock:
@@ -396,7 +448,8 @@ class Simulation:
                 with self._lock:
                     n_avg = dict(self.n_avg)
                     prob = {r: dict(self.purchase_prob[r]) for r in REGIONS}
-                rows = generator.tick(sim_from, sim_to, n_avg)
+                    avg_stay = self.avg_stay
+                rows = generator.tick(sim_from, sim_to, n_avg, avg_stay)
                 sale_rows = seller.sales_for(rows, prob) if seller else []
                 with self._lock:
                     st = self.status
@@ -406,6 +459,7 @@ class Simulation:
                     st["sim_utc"], st["batches"] = sim_to, st["batches"] + 1
                     st["last_batch_rows"] = len(rows)
                     st["open_stores"] = generator.open_stores(sim_to)
+                    st["avg_stay_measured"] = generator.measured_stay()
                     for row in rows:
                         event = json.loads(row["raw_event"])
                         kind = "entries" if event["event_type"] == "ENTRY" else "exits"
@@ -420,6 +474,7 @@ class Simulation:
                         region_sales["transactions"] += 1
                         region_sales["amount"] = round(region_sales["amount"] + tx["amount"], 2)
                         region_sales["by_category"][tx["category"]] += 1
+                        region_sales["local"] += tx["client_id"][3:5] == tx["store_id"][:2]
                     st["remaining_seconds"] = max(0.0, MAX_RUN_REAL_SECONDS - elapsed)
                     st["history"].append({"sim_utc": sim_to, "entries": dict(st["entries"]),
                                          "exits": dict(st["exits"])})
@@ -466,5 +521,5 @@ class Simulation:
 
     def snapshot(self):
         with self._lock:
-            return json.loads(json.dumps({**self.status, "n_avg": dict(self.n_avg),
+            return json.loads(json.dumps({**self.status, "n_avg": dict(self.n_avg), "avg_stay": self.avg_stay,
                                           "purchase_prob": self.purchase_prob}, default=str))

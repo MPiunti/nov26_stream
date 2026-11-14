@@ -1,10 +1,10 @@
 
 -- ============================================================
 -- 09 - Populate client dimension
--- Target: workspace.test02_streaming.dim_client
+-- Target: workspace.test02_warehouse.dim_client
 --
--- 250 registered clients per store of each country, so 50,000
--- clients for the 200 stores (IT 10,000 ... SE 750).
+-- 500 registered clients per store of each country, so 100,000
+-- distinct clients for the 200 stores (IT 20,000 ... SE 1,500).
 -- client_id = CL-<country_code>-<7-digit number>.
 -- Needs dim_store with macro_region (run 01 and 02 first).
 --
@@ -12,15 +12,15 @@
 -- Rules: doc/client.md.
 -- ============================================================
 
-MERGE INTO workspace.test02_streaming.dim_client AS target
+MERGE INTO workspace.test02_warehouse.dim_client AS target
 
 USING (
     WITH per_country AS (
         SELECT
             country_code,
             macro_region,
-            COUNT(*) * 250 AS client_count
-        FROM workspace.test02_streaming.dim_store
+            COUNT(*) * 500 AS client_count
+        FROM workspace.test02_warehouse.dim_store
         GROUP BY country_code, macro_region
     )
 

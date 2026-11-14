@@ -14,7 +14,7 @@ from helpers import path, read_text
 sys.path.insert(0, path("apps", "people_stream", "app"))
 try:
     import simulator as sim
-    import warehouse
+    import sql_warehouse as warehouse
     from zoneinfo import ZoneInfo
     ZoneInfo("Europe/Rome")
 except Exception as exc:  # no time-zone database on this machine
@@ -334,6 +334,47 @@ class StreamTests(unittest.TestCase):
                     self.assertGreater(cohort.inside, 0)
                 t += HALF_HOUR
 
+    def test_stay_window_has_the_slider_average_and_respects_max_stay(self):
+        self.assertEqual((sim.AVG_STAY_DEFAULT, sim.AVG_STAY_MIN, sim.AVG_STAY_MAX, sim.AVG_STAY_STEP), (45, 5, 85, 5))
+        for avg in range(5, 90, 5):
+            lo, hi = sim.stay_window(avg)
+            self.assertAlmostEqual((lo + hi) / 2, avg)
+            self.assertGreaterEqual(lo, 0)
+            self.assertLessEqual(hi, sim.MAX_STAY_MINUTES)
+        self.assertEqual(sim.stay_window(45), (0, 90))
+        self.assertEqual(sim.stay_window(60), (30, 90))
+        self.assertEqual((sim.clamp_avg_stay(2), sim.clamp_avg_stay(62), sim.clamp_avg_stay(99)), (5, 60, 85))
+
+    def test_measured_average_stay_follows_the_slider(self):
+        for avg in (20, 45, 70):
+            g = sim.Generator(_stores()[:40], seed=avg)  # 40 Italian stores
+            t = datetime(2026, 11, 13, 8, 0, tzinfo=timezone.utc)  # 09:00 in Rome, before opening
+            for _ in range(24):  # 12 hours: the whole opening day
+                g.tick(t, t + HALF_HOUR, {r: 3000 for r in sim.REGIONS}, avg)
+                t += HALF_HOUR
+            measured = g.measured_stay()["EUROPE"]
+            self.assertAlmostEqual(measured, avg, delta=max(3, avg * 0.08), msg=f"slider {avg}, measured {measured}")
+
+    def test_flagships_get_45_percent_more_traffic(self):
+        self.assertEqual(sim.FLAGSHIP_IDS, {"IT-MI-001", "US-NY-001"})
+        milan = [s for s in _stores() if s.store_id.startswith("IT-MI-")]
+        rows, _ = _run(sim.Generator(milan, seed=9), days=6, n_avg={r: 3000 for r in sim.REGIONS})
+        entries = defaultdict(int)
+        for e in _events(rows):
+            if e["event_type"] == "ENTRY":
+                entries[e["store_id"]] += e["people_count"]
+        others = sum(v for k, v in entries.items() if k != "IT-MI-001") / (len(milan) - 1)
+        self.assertAlmostEqual(entries["IT-MI-001"] / others, 1.45, delta=0.05)
+
+    def test_app_has_the_average_stay_slider(self):
+        app = read_text(*APP, "app", "app.py")
+        self.assertIn('id="avg-stay", min=sim.AVG_STAY_MIN, max=sim.AVG_STAY_MAX, step=sim.AVG_STAY_STEP', app)
+        self.assertIn('Output("avg-stay", "value")', app)  # Reset to defaults
+        self.assertIn("stay_card(snapshot[\"avg_stay\"])", app)
+        s = sim.Simulation(lambda: [], lambda: {}, lambda rows: None)
+        s.set_avg_stay(33)
+        self.assertEqual(s.snapshot()["avg_stay"], 35)
+
     def test_stays_are_spread_evenly_up_to_max_stay(self):
         """A cohort leaves evenly over the 90 minutes after entering: one sixth per 15 minutes."""
         stream = sim.StoreStream(_stores()[0])  # Milan
@@ -487,7 +528,9 @@ class ShopConfigTests(unittest.TestCase):
         import shop_config
         rows = shop_config.describe(shop_config.load())
         self.assertEqual([r[1] for r in rows], [
-            "10:00 - 20:00", "90 min = 1.5 h", "Europe 3,000 / Americas 3,000 / Asia 3,000", "2,000 - 6,000, step 100",
+            "10:00 - 20:00", "90 min = 1.5 h", "45 min (slider 5 - 85, step 5)", "70% local, 30% visitors",
+            "IT-MI-001, US-NY-001: traffic 145%, 30% local",
+            "Europe 3,000 / Americas 3,000 / Asia 3,000", "2,000 - 6,000, step 100",
             "All regions: SHOES 5%, BAGS 2%, READY_TO_WEAR 6%, ACCESSORIES 3%, TRAVEL 2%, SUNGLASSES 2%",
             "0% - 100%, step 1",
             "240 s = 24 h", "48 h = 480 s", "5 s = 30 min"])
@@ -535,21 +578,25 @@ class AppBundleTests(unittest.TestCase):
     def test_app_resources_grant_what_the_app_uses(self):
         res = read_text(*APP, "resources", "people_stream.app.yml")
         self.assertIn("source_code_path: ../app", res)
-        grants = re.findall(r"securable_full_name: \$\{var\.catalog\}\.\$\{var\.schema\}\.(\w+)\s*\n\s*"
+        grants = re.findall(r"securable_full_name: \$\{var\.catalog\}\.\$\{var\.(\w+)\}\.(\w+)\s*\n\s*"
                             r"securable_type: TABLE\s*\n\s*permission: (\w+)", res)
-        self.assertEqual(sorted(grants), [("dim_client", "SELECT"), ("dim_product", "SELECT"),
-                                          ("dim_store", "SELECT"),
-                                          ("simulated_event_source", "MODIFY"), ("simulated_event_source", "SELECT"),
-                                          ("simulated_sales_source", "MODIFY"), ("simulated_sales_source", "SELECT")])
+        self.assertEqual(sorted(grants), [
+            ("schema", "simulated_event_source", "MODIFY"), ("schema", "simulated_event_source", "SELECT"),
+            ("schema", "simulated_sales_source", "MODIFY"), ("schema", "simulated_sales_source", "SELECT"),
+            ("warehouse_schema", "dim_client", "SELECT"), ("warehouse_schema", "dim_product", "SELECT"),
+            ("warehouse_schema", "dim_store", "SELECT")])
         self.assertIn("permission: CAN_USE", res)
 
     def test_app_yaml_tables_match_bundle_variables(self):
         app_yml = read_text(*APP, "databricks.yml")
         catalog = re.search(r"catalog:\n(?:\s+.*\n)*?\s+default: (\S+)", app_yml).group(1)
-        schema = re.search(r"schema:\n(?:\s+.*\n)*?\s+default: (\S+)", app_yml).group(1)
+        schema = re.search(r"^  schema:\n(?:\s+.*\n)*?\s+default: (\S+)", app_yml, re.M).group(1)
+        warehouse = re.search(r"^  warehouse_schema:\n(?:\s+.*\n)*?\s+default: (\S+)", app_yml, re.M).group(1)
         app_yaml = read_text(*APP, "app", "app.yaml")
-        self.assertIn(f"value: {catalog}.{schema}.dim_store", app_yaml)
-        self.assertIn(f"value: {catalog}.{schema}.simulated_event_source", app_yaml)
+        for table in ("dim_store", "dim_client", "dim_product"):
+            self.assertIn(f"value: {catalog}.{warehouse}.{table}", app_yaml)
+        for table in ("simulated_event_source", "simulated_sales_source"):
+            self.assertIn(f"value: {catalog}.{schema}.{table}", app_yaml)
         self.assertIn("valueFrom: sql-warehouse", app_yaml)
 
     def test_app_name_fits_30_characters(self):

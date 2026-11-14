@@ -1,7 +1,7 @@
 """Read and check shop_config.yml: store and simulation parameters. Standard library only.
 
-The file uses a small YAML subset (nested "key: value" lines, two-space indents, whole numbers,
-# comments), parsed here so the generator and its tests need no extra package. Anything outside
+The file uses a small YAML subset (nested "key: value" lines, two-space indents, whole numbers or a
+comma-separated list of ids, # comments), parsed here so the generator and its tests need no extra package. Anything outside
 the subset, an unknown or missing key, or an inconsistent value is rejected with a clear error.
 """
 import os
@@ -14,6 +14,9 @@ CATEGORIES = ("SHOES", "BAGS", "READY_TO_WEAR", "ACCESSORIES", "TRAVEL", "SUNGLA
 
 _SCHEMA = {
     "stores": {"opening_hour": int, "closing_hour": int, "max_stay_minutes": int},
+    "avg_stay_minutes": {"default": int, "min": int, "max": int, "step": int},
+    "clients": {"local_share": int},
+    "flagships": {"store_ids": list, "traffic_pct": int, "local_share": int},
     "n_avg_people": {"default": {r: int for r in REGIONS}, "min": int, "max": int, "step": int},
     "purchase_prob": {"default": {r: {c: int for c in CATEGORIES} for r in REGIONS},
                       "min": int, "max": int, "step": int},
@@ -26,6 +29,14 @@ class ShopConfig:
     opening_hour: int
     closing_hour: int
     max_stay_minutes: int
+    avg_stay_default: int
+    avg_stay_min: int
+    avg_stay_max: int
+    avg_stay_step: int
+    local_share: int            # percent of buyers from the store's country
+    flagship_ids: tuple
+    flagship_traffic_pct: int   # entering people vs N_AVG_PEOPLE, percent
+    flagship_local_share: int
     n_avg_default: dict
     n_avg_min: int
     n_avg_max: int
@@ -64,10 +75,11 @@ def parse(text):
         line = re.sub(r"\s+#.*$|^\s*#.*$", "", raw).rstrip()
         if not line.strip():
             continue
-        m = re.fullmatch(r"( *)([A-Za-z_][A-Za-z0-9_]*):(?: +(-?\d+))?", line)
+        m = re.fullmatch(r"( *)([A-Za-z_][A-Za-z0-9_]*):(?: +(-?\d+|[A-Z0-9][A-Z0-9-]*(?:, *[A-Z0-9][A-Z0-9-]*)*))?",
+                         line)
         if not m or len(m.group(1)) % 2:
-            raise ValueError(f"shop_config.yml line {number}: expected 'key: whole number' or 'key:' "
-                             f"with two-space indents, got {raw.strip()!r}")
+            raise ValueError(f"shop_config.yml line {number}: expected 'key: whole number', 'key: ID, ID' "
+                             f"or 'key:' with two-space indents, got {raw.strip()!r}")
         indent, key, value = len(m.group(1)), m.group(2), m.group(3)
         while stack[-1][0] >= indent:
             stack.pop()
@@ -79,8 +91,10 @@ def parse(text):
         if value is None:
             parent[key] = {}
             stack.append((indent, parent[key]))
-        else:
+        elif re.fullmatch(r"-?\d+", value):
             parent[key] = int(value)
+        else:
+            parent[key] = [v.strip() for v in value.split(",")]
     return root
 
 
@@ -94,7 +108,8 @@ def _check_shape(data, schema, where="shop_config.yml"):
                 raise ValueError(f"{where}.{key} must be a section")
             _check_shape(data[key], kind, f"{where}.{key}")
         elif not isinstance(data[key], kind):
-            raise ValueError(f"{where}.{key} must be a whole number")
+            what = "a comma-separated list of ids" if kind is list else "a whole number"
+            raise ValueError(f"{where}.{key} must be {what}")
 
 
 def load(path=CONFIG_PATH):
@@ -102,8 +117,12 @@ def load(path=CONFIG_PATH):
         data = parse(f.read())
     _check_shape(data, _SCHEMA)
     s, n, p, sim = data["stores"], data["n_avg_people"], data["purchase_prob"], data["simulation"]
+    a, c, f = data["avg_stay_minutes"], data["clients"], data["flagships"]
     cfg = ShopConfig(
         opening_hour=s["opening_hour"], closing_hour=s["closing_hour"], max_stay_minutes=s["max_stay_minutes"],
+        avg_stay_default=a["default"], avg_stay_min=a["min"], avg_stay_max=a["max"], avg_stay_step=a["step"],
+        local_share=c["local_share"], flagship_ids=tuple(f["store_ids"]), flagship_traffic_pct=f["traffic_pct"],
+        flagship_local_share=f["local_share"],
         n_avg_default=dict(n["default"]), n_avg_min=n["min"], n_avg_max=n["max"], n_avg_step=n["step"],
         purchase_prob_default={r: dict(p["default"][r]) for r in REGIONS},
         prob_min=p["min"], prob_max=p["max"], prob_step=p["step"],
@@ -115,6 +134,20 @@ def load(path=CONFIG_PATH):
         problems.append("stores: need 0 <= opening_hour < closing_hour <= 24")
     elif not 0 < cfg.max_stay_minutes <= (cfg.closing_hour - cfg.opening_hour) * 60:
         problems.append("stores: max_stay_minutes must be > 0 and no longer than the opening hours")
+    if not 0 < cfg.avg_stay_min <= cfg.avg_stay_max < cfg.max_stay_minutes or cfg.avg_stay_step <= 0:
+        problems.append("avg_stay_minutes: need 0 < min <= max < stores.max_stay_minutes and step > 0")
+    elif (cfg.avg_stay_max - cfg.avg_stay_min) % cfg.avg_stay_step or not (
+            cfg.avg_stay_min <= cfg.avg_stay_default <= cfg.avg_stay_max
+            and (cfg.avg_stay_default - cfg.avg_stay_min) % cfg.avg_stay_step == 0):
+        problems.append("avg_stay_minutes: max - min must be a multiple of step, default in min..max on the grid")
+    for name, share in (("clients.local_share", cfg.local_share), ("flagships.local_share", cfg.flagship_local_share)):
+        if not 0 <= share <= 100:
+            problems.append(f"{name}: must be a percent, 0..100")
+    if not 0 < cfg.flagship_traffic_pct <= 1000:
+        problems.append("flagships.traffic_pct: must be > 0 and at most 1000")
+    for store_id in cfg.flagship_ids:
+        if not re.fullmatch(r"[A-Z]{2}-[A-Z]{2}-\d{3}", store_id):
+            problems.append(f"flagships.store_ids: {store_id} isn't a store id like IT-MI-001")
     if not 0 < cfg.n_avg_min <= cfg.n_avg_max or cfg.n_avg_step <= 0:
         problems.append("n_avg_people: need 0 < min <= max and step > 0")
     elif (cfg.n_avg_max - cfg.n_avg_min) % cfg.n_avg_step:
@@ -160,7 +193,15 @@ def describe(cfg):
         ("stores.opening_hour / closing_hour", f"{cfg.opening_hour:02d}:00 - {cfg.closing_hour:02d}:00",
          "Opening hours, each store's local time"),
         ("stores.max_stay_minutes", f"{cfg.max_stay_minutes} min = {_num(cfg.max_stay_minutes / 60)} h",
-         "Longest a person stays inside; each stay is drawn evenly between 0 and this, and ends by closing"),
+         "Longest a person stays inside; every stay also ends by closing"),
+        ("avg_stay_minutes.default / min / max", f"{cfg.avg_stay_default} min (slider {cfg.avg_stay_min} - "
+         f"{cfg.avg_stay_max}, step {cfg.avg_stay_step})",
+         "Average stay inside a store (exit - entry), start value of the stay slider"),
+        ("clients.local_share", f"{cfg.local_share}% local, {100 - cfg.local_share}% visitors",
+         "Buyers registered in the store's country; visitors are registered in another country"),
+        ("flagships", f"{', '.join(cfg.flagship_ids)}: traffic {cfg.flagship_traffic_pct}%, "
+         f"{cfg.flagship_local_share}% local",
+         "Flagship stores: more entering people and more visitors"),
         ("n_avg_people.default", " / ".join(f"{r.title()} {_num(d[r])}" for r in REGIONS),
          "Average visitors per store per simulated day; slider start values"),
         ("n_avg_people.min / max / step", f"{_num(cfg.n_avg_min)} - {_num(cfg.n_avg_max)}, step {cfg.n_avg_step}",

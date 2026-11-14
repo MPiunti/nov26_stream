@@ -2,22 +2,22 @@
 
 Reference for the project's data: the store dimension, the people-counter events, how they are assumed to be streamed into the pipeline, and the volume assumptions. All data is synthetic.
 
-Pipeline steps and validation rules are in [`readme.md`](../readme.md) ("Data flow", "Validation rules"); this page doesn't repeat them.
+Pipeline steps and validation rules are in [`readme.md`](../readme.md) ("Data flow", "Validation rules"); schemas and keys in [`warehouse.md`](warehouse.md); this page doesn't repeat them.
 
 ## 1. Data model
 
 | Object | Grain | Key | Defined in |
 |---|---|---|---|
-| `workspace.test02_streaming.dim_store` | One row per store | `store_id` (primary key) | `src/sql/01_create_dim_store.sql`, `02_populate_dim_store.sql` |
+| `workspace.test02_warehouse.dim_store` | One row per store | `store_id` (primary key) | `src/sql/01_create_dim_store.sql`, `02_populate_dim_store.sql` |
 | `workspace.test02_streaming.simulated_event_source` | One row per message received | `source_topic` + `source_partition` + `source_offset` | `src/sql/04_create_simulated_event_source.sql`, `05_insert_simulated_events.sql` |
 | `bronze_people_counter_events` | One row per message received | as the source | Pipeline, `01_bronze.py` |
 | `silver_people_counter_events` | One row per valid event | `event_id` (primary key); `store_id` → `dim_store` | Pipeline, `02_silver.py` |
 | `quarantine_people_counter_events` | One row per invalid event | none | Pipeline, `02_silver.py` |
-| `workspace.test02_streaming.dim_client` | One row per registered client | `client_id` (natural) | `src/sql/08_…`, `09_…`; see [`client.md`](client.md) |
-| `workspace.test02_streaming.dim_product` | One row per product | `product_id` (natural) | `src/sql/10_…`, `11_…`; see [`product.md`](product.md) |
+| `workspace.test02_warehouse.dim_client` | One row per registered client | `client_id` (natural) | `src/sql/08_…`, `09_…`; see [`client.md`](client.md) |
+| `workspace.test02_warehouse.dim_product` | One row per product | `product_id` (natural) | `src/sql/10_…`, `11_…`; see [`product.md`](product.md) |
 | `workspace.test02_streaming.simulated_sales_source` | One row per sales transaction | `source_topic` + `source_partition` + `source_offset` | `src/sql/12_…`; filled by the app; see [`sales.md`](sales.md) |
 
-All keys are natural keys; the project uses no surrogate keys.
+All keys are natural keys; the project uses no surrogate keys. Dimensions are in `test02_warehouse`, streaming tables in `test02_streaming` ([`warehouse.md`](warehouse.md) §1).
 
 ## 2. Store dimension
 
@@ -26,17 +26,17 @@ All keys are natural keys; the project uses no surrogate keys.
 | Column | Type | Rule |
 |---|---|---|
 | `store_id` | STRING, not null | `<country_code>-<city_code>-<nnn>`, e.g. `IT-MI-001`; `nnn` runs from `001` to the city's store count |
-| `store_name` | STRING, not null | `Retail Store <city> <nnn>` |
+| `store_name` | STRING, not null | `Retail Store <city> <nnn>`; the two flagships have their own names (§2.5) |
 | `country_code` | STRING, not null | ISO 3166-1 alpha-2 |
 | `country_name` | STRING, not null | |
 | `city` | STRING, not null | |
 | `region` | STRING | State, province or administrative region, e.g. `Lombardy`, `California` |
-| `macro_region` | STRING | `EUROPE`, `AMERICAS` or `ASIA`, derived from `country_code` (§2.3) |
+| `macro_region` | STRING, not null | `EUROPE`, `AMERICAS` or `ASIA`, derived from `country_code` (§2.3) |
+| `is_flagship` | BOOLEAN, not null | `TRUE` for the two flagships (§2.5) |
 | `timezone_id` | STRING, not null | IANA time zone of the city |
 | `is_active` | BOOLEAN, not null | `TRUE` for every generated store |
 | `created_at`, `updated_at` | TIMESTAMP | Set by the MERGE in `02_…` |
 
-`macro_region` is nullable only because it can be added to an existing table; `03_validate_dim_store.sql` requires it on every row.
 
 ### 2.2 Distribution
 
@@ -96,11 +96,22 @@ A new country must be added to this table, to the `CASE` in `02_populate_dim_sto
 
 All three scripts are in `src/sql/` and are safe to rerun.
 
-1. `01_create_dim_store.sql` creates the schema and table if missing. On a table created before `macro_region` existed, it adds the column (checked in `information_schema`, because `ADD COLUMN IF NOT EXISTS` isn't supported).
-2. `02_populate_dim_store.sql` merges the 200 stores: it inserts missing stores and fills or corrects `macro_region` on existing ones.
+1. `01_create_dim_store.sql` creates the `test02_warehouse` schema and the table if missing.
+2. `02_populate_dim_store.sql` merges the 200 stores: it inserts missing stores and fills or corrects `store_name`, `macro_region` and `is_flagship` on existing ones.
 3. `03_validate_dim_store.sql` must return `PASS` on every row.
 
 The pipeline reads `dim_store` as a static lookup, so updating it doesn't affect the stream.
+
+### 2.5 Flagship stores
+
+Two existing stores are flagships (`is_flagship = TRUE`), with their own names:
+
+| `store_id` | `store_name` | Traffic | Buyers |
+|---|---|---|---|
+| `IT-MI-001` | Milan Galleria Vittorio Emanuele | **+45%**: 145% of the region's N_AVG_PEOPLE | **30% local, 70% visitors** (the inverse of the other stores) |
+| `US-NY-001` | New York Fifth Avenue | **+45%** | **30% local, 70% visitors** |
+
+They keep their city, country and time zone, so the store counts of §2.2 don't change. The traffic and buyer shares are simulation parameters in the app's `shop_config.yml` (`flagships.*`, `people_stream.md` §2); who counts as local or visitor is in [`client.md`](client.md) §4.
 
 ## 3. People flow: how events reach the pipeline
 
@@ -167,7 +178,7 @@ The number of visitors is a parameter per macro region:
 | `N_AVG_PEOPLE_AMERICA` | Average visitors per store per day, AMERICAS stores | 3000 |
 | `N_AVG_PEOPLE_ASIA` | Average visitors per store per day, ASIA stores | 3000 |
 
-A visitor is one person entering: the sum of `people_count` over a store's `ENTRY` events in a day. Each visitor stays at most 1.5 hours (`stores.max_stay_minutes` in the app's `shop_config.yml`, see [`people_stream.md`](people_stream.md) §5) and leaves by closing time, so `EXIT` totals match `ENTRY` totals by closing time.
+A visitor is one person entering: the sum of `people_count` over a store's `ENTRY` events in a day. Each visitor stays inside on average the app's stay slider value (default 45 minutes, `avg_stay_minutes`) and at most 1.5 hours (`stores.max_stay_minutes`), see [`people_stream.md`](people_stream.md) §5, and leaves by closing time, so `EXIT` totals match `ENTRY` totals by closing time. The two flagships get 45% more visitors than their region's N_AVG_PEOPLE (§2.5).
 
 With the defaults:
 

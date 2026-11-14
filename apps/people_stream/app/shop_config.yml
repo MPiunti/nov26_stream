@@ -1,11 +1,26 @@
 # Store and simulation parameters of the people-stream app. See doc/people_stream.md, "Configuration".
 # Read once when the app starts: after a change, redeploy the app bundle (or restart the app).
-# Format: nested "key: value" lines, two-space indents, whole numbers, # comments.
+# Format: nested "key: value" lines, two-space indents, whole numbers (store_ids: a comma-separated
+# list of store ids), # comments.
 
 stores:
   opening_hour: 10          # stores open at 10:00 local time
   closing_hour: 20          # stores close at 20:00 local time
-  max_stay_minutes: 90      # a person stays inside at most 1.5 hours (each stay drawn evenly in 0..90 min)
+  max_stay_minutes: 90      # a person stays inside at most 1.5 hours
+
+avg_stay_minutes:           # average stay inside a store (exit time - entry time); slider on the Simulator tab
+  default: 45               # stays drawn evenly in 0..90 min, as before
+  min: 5                    # slider range; max must stay below max_stay_minutes
+  max: 85
+  step: 5
+
+clients:
+  local_share: 70           # percent of buyers registered in the store's country; the rest are visitors
+
+flagships:                  # flagship stores: more traffic and the inverse client mix
+  store_ids: IT-MI-001, US-NY-001   # Milan Galleria Vittorio Emanuele, New York Fifth Avenue
+  traffic_pct: 145          # entering people = 145% of the region's N_AVG_PEOPLE (+45%)
+  local_share: 30           # percent of buyers from the store's country (70% visitors)
 
 n_avg_people:               # average visitors per store per simulated day, by macro region
   default:                  # slider start values and "Reset to defaults"

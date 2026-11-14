@@ -14,7 +14,7 @@ from test_people_stream import APP, SKIP_REASON, _FastClock, _run, _stores, sim
 if sim is not None:
     import sales
     import shop_config
-    import warehouse
+    import sql_warehouse as warehouse
 
 CATEGORY_CODES = {"SHOES": "SH", "BAGS": "BG", "READY_TO_WEAR": "RW", "ACCESSORIES": "AC", "TRAVEL": "TR",
                   "SUNGLASSES": "SG"}
@@ -34,9 +34,9 @@ def _products():
 
 
 def _clients():
-    """The clients 09_populate_dim_client.sql generates: 250 per store of each country."""
+    """The clients 09_populate_dim_client.sql generates: 500 per store of each country."""
     per_country = Counter(s.store_id[:2] for s in _stores())
-    return [(f"CL-{cc}-{n:07d}", cc) for cc, stores in per_country.items() for n in range(1, stores * 250 + 1)]
+    return [(f"CL-{cc}-{n:07d}", cc) for cc, stores in per_country.items() for n in range(1, stores * 500 + 1)]
 
 
 def _catalog():
@@ -60,9 +60,11 @@ def _probs(value=None):
 
 class DimensionScriptTests(unittest.TestCase):
 
-    def test_client_script_generates_250_per_store_per_country(self):
+    def test_client_script_generates_500_per_store_per_country(self):
         sql = read_text(*SQL, "09_populate_dim_client.sql")
-        self.assertIn("COUNT(*) * 250 AS client_count", sql)
+        self.assertIn("COUNT(*) * 500 AS client_count", sql)
+        self.assertEqual(len(_clients()), 100000)
+        self.assertEqual(len({c for c, _ in _clients()}), 100000, "distinct clients")
         self.assertIn("CONCAT('CL-', country_code, '-', LPAD(CAST(client_number AS STRING), 7, '0'))", sql)
         self.assertIn("WHEN NOT MATCHED THEN INSERT", sql)
         self.assertNotIn("WHEN MATCHED THEN", sql)
@@ -72,9 +74,11 @@ class DimensionScriptTests(unittest.TestCase):
         stores = Counter(s.store_id[:2] for s in _stores())
         rows = re.findall(r"^\| (\w+) \| (\w\w) \| (\d+) \| ([\d,]+) \|", doc, re.M)
         self.assertEqual({cc: (int(n), int(c.replace(",", ""))) for _, cc, n, c in rows},
-                         {cc: (n, n * 250) for cc, n in stores.items()})
-        self.assertIn("**50,000** (EUROPE 25,000, AMERICAS 15,000, ASIA 10,000)", doc)
-        self.assertIn("50000 AS expected_value", read_text(*SQL, "13_validate_dim_client_product.sql"))
+                         {cc: (n, n * 500) for cc, n in stores.items()})
+        self.assertIn("**100,000** (EUROPE 50,000, AMERICAS 30,000, ASIA 20,000)", doc)
+        validate = read_text(*SQL, "13_validate_dim_client_product.sql")
+        self.assertIn("100000 AS expected_value", validate)
+        self.assertIn("COUNT(*) * 500 AS expected_count", validate)
 
     def test_products_20_per_category_with_documented_prices(self):
         rows = _product_rows()
@@ -154,6 +158,27 @@ class SalesGeneratorTests(unittest.TestCase):
             self.assertEqual(row["source_partition"], exit_row["source_partition"])
             self.assertEqual(row["source_timestamp"], exit_row["source_timestamp"])
             self.assertEqual(row["source_topic"], "retail-sales-app")
+
+    def test_70_percent_local_clients_and_inverse_at_flagships(self):
+        gen = sales.SalesGenerator(_catalog(), _store_country(), run_id="mix12345", seed=5,
+                                   local_share=sim.CONFIG.local_share, flagship_ids=sim.FLAGSHIP_IDS,
+                                   flagship_local_share=sim.CONFIG.flagship_local_share)
+        probs = _probs(20)
+        rows = []
+        for _ in range(3):  # the people rows of one day, sold three times over for a large sample
+            rows += gen.sales_for(self.people, probs)
+        clients = dict(_clients())
+        local, total = Counter(), Counter()
+        for row in rows:
+            tx = json.loads(row["raw_event"])
+            kind = "flagship" if tx["store_id"] in sim.FLAGSHIP_IDS else "other"
+            total[kind] += 1
+            local[kind] += clients[tx["client_id"]] == tx["store_id"][:2]
+        self.assertEqual((sim.CONFIG.local_share, sim.CONFIG.flagship_local_share), (70, 30))
+        self.assertAlmostEqual(local["other"] / total["other"], 0.70, delta=0.01)
+        self.assertAlmostEqual(local["flagship"] / total["flagship"], 0.30, delta=0.04)
+        visitor_countries = {clients[json.loads(r["raw_event"])["client_id"]] for r in rows}
+        self.assertEqual(len(visitor_countries), 13, "visitors come from every country")
 
     def test_ids_and_offsets(self):
         rows = self._sales(_probs(), offsets={0: 50, 1: 1, 2: 9})
@@ -284,9 +309,10 @@ class SalesAppAndDocTests(unittest.TestCase):
 
     def test_app_settings_name_the_sales_tables(self):
         app_yaml = read_text(*APP, "app", "app.yaml")
-        for var, table in (("CLIENT_TABLE", "dim_client"), ("PRODUCT_TABLE", "dim_product"),
-                           ("SALES_TABLE", "simulated_sales_source")):
-            self.assertRegex(app_yaml, rf"name: {var}\n\s+value: workspace\.test02_streaming\.{table}")
+        for var, table in (("CLIENT_TABLE", "test02_warehouse.dim_client"),
+                           ("PRODUCT_TABLE", "test02_warehouse.dim_product"),
+                           ("SALES_TABLE", "test02_streaming.simulated_sales_source")):
+            self.assertRegex(app_yaml, rf"name: {var}\n\s+value: workspace\.{table}")
 
     def test_sales_doc_matches_the_code(self):
         doc = read_text("doc", "sales.md")

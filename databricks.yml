@@ -17,8 +17,11 @@ variables:
     description: Unity Catalog catalog for the pipeline tables
     default: workspace
   schema:
-    description: Schema for the pipeline tables
+    description: "Streaming schema: simulated sources and the pipeline's streaming tables"
     default: test02_streaming
+  warehouse_schema:
+    description: "Data warehouse schema: dimensions (dim_store, dim_client, dim_product), see doc/warehouse.md"
+    default: test02_warehouse
 
 targets:
   # The 'dev' target, for development purposes. This target is the default.

@@ -6,13 +6,13 @@ env:
     valueFrom: sql-warehouse
   # Keep these the same as the table resources in resources/people_stream.app.yml.
   - name: STORE_TABLE
-    value: workspace.test02_streaming.dim_store
+    value: workspace.test02_warehouse.dim_store
   - name: SOURCE_TABLE
     value: workspace.test02_streaming.simulated_event_source
   - name: CLIENT_TABLE
-    value: workspace.test02_streaming.dim_client
+    value: workspace.test02_warehouse.dim_client
   - name: PRODUCT_TABLE
-    value: workspace.test02_streaming.dim_product
+    value: workspace.test02_warehouse.dim_product
   - name: SALES_TABLE
     value: workspace.test02_streaming.simulated_sales_source
 # Store and simulation parameters (opening hours, N_AVG_PEOPLE, day length, run length, batch

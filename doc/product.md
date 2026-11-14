@@ -1,8 +1,8 @@
 # Product dimension
 
-Reference for `workspace.test02_streaming.dim_product`: the fashion products the stores sell, by merchandise category. All products are synthetic.
+Reference for `workspace.test02_warehouse.dim_product`: the fashion products the stores sell, by merchandise category. All products are synthetic.
 
-Sales use products as described in [`sales.md`](sales.md).
+Sales use products as described in [`sales.md`](sales.md); the schemas and keys are in [`warehouse.md`](warehouse.md).
 
 ## 1. Keys
 

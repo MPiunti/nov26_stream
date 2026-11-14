@@ -132,11 +132,16 @@ class PipelineCodeTests(unittest.TestCase):
                                  f"{table} has a TIMESTAMP_NTZ column but doesn't enable timestampNtz")
 
     def test_table_names_use_bundle_catalog_and_schema(self):
-        prefix = f"{_bundle_variable_default('catalog')}.{_bundle_variable_default('schema')}."
+        """Streaming tables in `schema`, dimensions in `warehouse_schema`."""
+        catalog = _bundle_variable_default("catalog")
+        streaming, warehouse = _bundle_variable_default("schema"), _bundle_variable_default("warehouse_schema")
+        self.assertEqual((streaming, warehouse), ("test02_streaming", "test02_warehouse"))
         for f in PIPELINE_FILES:
             for name, value in constants(parse(f)).items():
                 if name.endswith("_TABLE"):
-                    self.assertTrue(value.startswith(prefix), f"{f}: {name} = {value} isn't in {prefix}*")
+                    schema = warehouse if value.split(".")[-1].startswith("dim_") else streaming
+                    self.assertTrue(value.startswith(f"{catalog}.{schema}."), f"{f}: {name} = {value}")
+        self.assertIn(f"REFERENCES {catalog}.{warehouse}.dim_store(store_id)", read_text("src/pipelines/02_silver.py"))
 
     def test_silver_and_quarantine_select_their_schema_columns(self):
         tree = parse("src/pipelines/02_silver.py")
@@ -173,13 +178,14 @@ class PipelineCodeTests(unittest.TestCase):
         created = set()
         for f in PIPELINE_FILES:
             created.update(pipeline_tables(parse(f)))
-        prefix = f"{_bundle_variable_default('catalog')}.{_bundle_variable_default('schema')}."
+        catalog = _bundle_variable_default("catalog")
+        prefixes = tuple(f"{catalog}.{_bundle_variable_default(v)}." for v in ("schema", "warehouse_schema"))
         for f in PIPELINE_FILES:
             for name, value in constants(parse(f)).items():
                 if name.endswith("_TABLE") and value.split(".")[-1] not in created:
                     self.assertIn(value, required, f"{f} reads {value}, which 00_check_tables.py doesn't check")
         for table in required:
-            self.assertTrue(table.startswith(prefix), f"REQUIRED_TABLES: {table} isn't in {prefix}*")
+            self.assertTrue(table.startswith(prefixes), f"REQUIRED_TABLES: {table} isn't in {prefixes}")
 
     def test_rejection_codes_are_documented(self):
         documented = set(re.findall(r"^\| `([A-Z_]+)` \|", read_text("readme.md"), re.M))

@@ -1,7 +1,7 @@
 
 -- ============================================================
 -- 11 - Populate product dimension
--- Target: workspace.test02_streaming.dim_product
+-- Target: workspace.test02_warehouse.dim_product
 --
 -- 20 products per merchandise category, 120 in total.
 -- product_id = <code>-<4-digit number>; list_price = base + n * step.
@@ -18,7 +18,7 @@
 -- Rules: doc/product.md.
 -- ============================================================
 
-MERGE INTO workspace.test02_streaming.dim_product AS target
+MERGE INTO workspace.test02_warehouse.dim_product AS target
 
 USING (
     WITH categories AS (
