@@ -100,11 +100,30 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(listed, PIPELINE_FILES)
 
     def test_no_deprecated_pipeline_fields(self):
-        """continuous, development, target and trigger are deprecated in the bundle schema."""
+        """continuous, development, target and trigger are deprecated on pipelines in the bundle schema.
+
+        (A job's `continuous:` is fine: that's how the pipeline runs continuously, see the job tests.)
+        """
         for res in glob.glob(path("resources", "**", "*.yml"), recursive=True):
+            text = read_text(res)
+            if not re.search(r"(?m)^  pipelines:", text):
+                continue
             for field in ("continuous", "development", "target", "trigger"):
-                self.assertNotRegex(read_text(res), rf"(?m)^\s+{field}:",
+                self.assertNotRegex(text, rf"(?m)^\s+{field}:",
                                     f"{os.path.basename(res)} uses deprecated field {field}")
+
+    def test_continuous_job_runs_the_pipeline(self):
+        job = read_text("resources", "modeling.peoplecounter.job.yml")
+        self.assertRegex(job, r"(?m)^  jobs:\n    retail_people_counter_continuous:")
+        self.assertRegex(job, r"continuous:\n\s+pause_status: PAUSED", "created paused; resumed after the full refresh")
+        self.assertIn("pipeline_id: ${resources.pipelines.retail_people_counter_bronze.id}", job)
+        self.assertNotRegex(job, r"(?m)^\s+full_refresh:", "a full refresh on every update would wipe the tables")
+        self.assertNotIn("clusters", job)
+
+    def test_bronze_skips_the_deletes_of_an_app_start(self):
+        """The app empties the source at START; bronze must skip that delete to keep streaming."""
+        code = read_text("src/pipelines/01_bronze.py")
+        self.assertRegex(code, r'spark\.readStream\s*\.option\("skipChangeCommits", "true"\)\s*\.table\(SOURCE_TABLE\)')
 
     def test_serverless_only(self):
         for res in glob.glob(path("resources", "**", "*.yml"), recursive=True):

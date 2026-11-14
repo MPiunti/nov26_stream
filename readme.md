@@ -42,7 +42,8 @@ nov26_stream/
 │           ├── app.yaml            Start command and environment variables (warehouse, table names)
 │           └── requirements.txt    Pinned packages, installed by Databricks on deploy
 ├── resources/
-│   └── modeling.peoplecounter.pipeline.yml  The pipeline: catalog, schema, serverless, source files
+│   ├── modeling.peoplecounter.pipeline.yml  The pipeline: catalog, schema, serverless, source files
+│   └── modeling.peoplecounter.job.yml       Continuous job that keeps the pipeline running (created paused)
 ├── src/
 │   ├── pipelines/                  Pipeline source files only
 │   │   ├── 00_check_tables.py      Pre-flight check that the input tables exist
@@ -92,7 +93,9 @@ Only the files in `src/pipelines/` are pipeline source files, and the pipeline l
 
 **Two schemas** ([`doc/warehouse.md`](doc/warehouse.md)): the dimensions are in `workspace.test02_warehouse`; the sources and all pipeline tables, which are streaming tables, are in `workspace.test02_streaming`. The silver table has a primary key on `event_id` and a foreign key on `store_id` to `test02_warehouse.dim_store`.
 
-**A load iteration:** run `05_insert_simulated_events.sql` (or, later, receive events from Event Hubs), then run the pipeline. With the people-stream app: every START **empties both source tables** (people events and sales, including the events of `05_…`), so after a START run the pipeline with **Full refresh all**; a normal run fails, because rows were deleted from the stream's source. See [`doc/people_stream.md`](doc/people_stream.md) §7. The pipeline first runs the pre-flight check, then picks up only the source rows it hasn't processed yet.
+**A load iteration:** run `05_insert_simulated_events.sql` (or, later, receive events from Event Hubs), then run the pipeline. With the people-stream app: every START **empties both source tables** (people events and sales, including the events of `05_…`), so after a START run the pipeline once with a **full refresh**, then keep it running with the continuous job; see [Running the pipeline](#running-the-pipeline). The pipeline first runs the pre-flight check, then picks up only the source rows it hasn't processed yet.
+
+**Deletes in the source:** bronze reads the source with `skipChangeCommits`, so the deletes of an app START don't stop the stream: it skips them and goes on with the new rows. Until the next full refresh, bronze, silver and quarantine still hold the previous run's rows as well.
 
 **No duplicate source rows:** a source row is identified by `source_topic`, `source_partition` and `source_offset`, the message's identity in Event Hubs. `05_…` inserts with a `MERGE` on those three columns, so running it again inserts nothing. The `MERGE` must stay insert-only (no `WHEN MATCHED`): bronze reads the source table as a stream, and an update or delete there breaks the stream.
 
@@ -126,7 +129,8 @@ The 8 simulated events give 5 silver rows and 3 quarantine rows: invalid JSON (o
 | **Catalog and schemas** | Catalog `workspace` (**not** `main`). `test02_warehouse` for the dimensions (bundle variable `warehouse_schema`), `test02_streaming` for the sources and pipeline tables (bundle variable `schema`). See [`doc/warehouse.md`](doc/warehouse.md). |
 | **Git folder** | `/Workspace/Users/michele.piunti@gmail.com/retail_people_counter_bundle`, linked to `github.com/MPiunti/nov26_stream`, branch `main` |
 | **Bundle target** | `dev` (development mode, the default). `prod` deploys to `/Users/michele.piunti@gmail.com/.bundle/retail_people_counter_bundle/prod` and runs as the owner. |
-| **Pipeline** | `retail_people_counter_bronze`, shown as `[dev michele_piunti] retail-people-counter-bronze-dev`. Serverless, triggered: it runs only when started. Don't set `continuous` (deprecated); to run it continuously, start it from a continuous job. |
+| **Pipeline** | `retail_people_counter_bronze`, shown as `[dev michele_piunti] retail-people-counter-bronze-dev`. Serverless, triggered: on its own, each run processes what's new and stops. Don't set `continuous` on the pipeline (deprecated); it runs continuously through the job below. |
+| **Continuous job** | `retail_people_counter_continuous`, shown as `[dev michele_piunti] retail-people-counter-continuous-dev`, under **Jobs & Pipelines**. Runs the pipeline over and over, so it picks up every event the app writes within seconds. Created **paused**; development mode pauses it again on every deploy. |
 | **App** | `people-stream-michele-piunti`, under **Compute → Apps**, from the `retail_people_stream_bundle` bundle in `apps/people_stream/`. Writes through the Serverless Starter Warehouse. |
 
 ## Tools
@@ -148,9 +152,23 @@ The 8 simulated events give 5 silver rows and 3 quarantine rows: invalid JSON (o
 | Deploy the pipeline | In the Git folder: **Deployments** (rocket) → `dev` → **Deploy**. Or `& $db bundle deploy -t dev --profile MPiunti`, from the repo root. |
 | Deploy and start the app | From `apps/people_stream/`: `& $db bundle deploy -t dev --profile MPiunti`, then `& $db bundle run people_stream -t dev --profile MPiunti`. Or open `apps/people_stream/` in the Git folder and use **Deployments**. Run `src/sql/01_…`, `02_…`, `04_…` and, for sales, `08_…` to `12_…` first. See [`doc/people_stream.md`](doc/people_stream.md) §9. |
 | Run the pipeline | Pipeline UI → **Start**, or `& $db bundle run retail_people_counter_bronze -t dev --profile MPiunti`. After an app START: **Full refresh all**, or add `--full-refresh-all` |
+| Follow the app continuously | See [Running the pipeline](#running-the-pipeline): Pause the job, START the app, full refresh, Resume the job |
 | Rebuild silver and quarantine | Pipeline UI → **Full refresh selection** on the two tables. Needed after a change to a table's schema or table features, because a normal update doesn't change an existing table's features. |
 | Run the tests on a PC | `python -m unittest discover -s tests`. See [Tests](#tests). |
 | Run the tests in Databricks | Open `tests/run_tests` in the Git folder and click **Run all** |
+
+## Running the pipeline
+
+The app and the pipeline are decoupled: the app writes to the source tables, the pipeline reads them. For each app run:
+
+| Step | Where | What happens |
+|---|---|---|
+| 1. **Pause** the continuous job (if it's running) | Jobs & Pipelines → `[dev michele_piunti] retail-people-counter-continuous-dev` → **Pause** | No pipeline update runs. Only one update can run at a time, so this frees the pipeline for the full refresh |
+| 2. **START** the app | People-stream app | The app empties both source tables and starts writing people events and sales |
+| 3. **Full refresh** the pipeline, once | Jobs & Pipelines → `[dev michele_piunti] retail-people-counter-bronze-dev` → arrow next to **Run pipeline** → **Run pipeline with full table refresh** (older UI: **Start** ▾ → **Full refresh all**). Or `& $db bundle run retail_people_counter_bronze --full-refresh-all -t dev --profile MPiunti` | Bronze, silver and quarantine are emptied and rebuilt from the current source: the current run only. Silver is recreated with its foreign key to `test02_warehouse.dim_store` |
+| 4. **Resume** the continuous job | The job's page → **Resume** | From now on the job keeps the pipeline running: every new event the app writes reaches bronze and silver within seconds, for the rest of the run |
+
+Pause the job again when the run is over: while it's resumed, it keeps serverless compute running and billed. If you forget step 1, nothing breaks: bronze skips the START's deletes and keeps streaming, but the tables hold the previous run too until you do steps 1, 3 and 4. A normal **Run pipeline** (no full refresh) also works at any time; it adds what's new and stops.
 
 ## Working rules
 
@@ -184,7 +202,7 @@ The `tests/` folder checks that the project's parts agree with each other, befor
 
 | File | Checks |
 |---|---|
-| `test_project_consistency.py` | Bundle: name, targets, includes, the files the pipeline points to, serverless only, no deprecated pipeline fields. Pipeline code: the pre-flight check runs first and covers every input table; dimensions are read from `warehouse_schema` and streaming tables use `schema`; every table with a `TIMESTAMP_NTZ` column enables `timestampNtz`; table names use the bundle's catalog and schema; every rejection code is in [Validation rules](#validation-rules) and vice versa. Simulated events: the load is an insert-only `MERGE` on topic, partition and offset; offsets are unique; the 8 events and their expected outcome. Docs: every test file is listed on this page, and `CLAUDE.md` loads this page and keeps the mandatory rules. |
+| `test_project_consistency.py` | Bundle: name, targets, includes, the files the pipeline points to, serverless only, no deprecated pipeline fields. Pipeline code: the pre-flight check runs first and covers every input table; bronze skips the source deletes of an app START (`skipChangeCommits`); the continuous job runs the pipeline, is created paused and never full-refreshes; dimensions are read from `warehouse_schema` and streaming tables use `schema`; every table with a `TIMESTAMP_NTZ` column enables `timestampNtz`; table names use the bundle's catalog and schema; every rejection code is in [Validation rules](#validation-rules) and vice versa. Simulated events: the load is an insert-only `MERGE` on topic, partition and offset; offsets are unique; the 8 events and their expected outcome. Docs: every test file is listed on this page, and `CLAUDE.md` loads this page and keeps the mandatory rules. |
 | `test_dataset.py` | The rules in [`doc/dataset.md`](doc/dataset.md): the store distribution and totals match `02_populate_dim_store.sql`; `macro_region` is defined in the create, populate and validate scripts, and every country maps to one macro region the same way in each; the two flagships (`IT-MI-001`, `US-NY-001`) and their names; the dimensions live only in `test02_warehouse` and the sources in `test02_streaming`; the validation script's expected counts match; at least one store is open at every UTC hour, in winter and summer; the `N_AVG_PEOPLE_*` defaults. `agents.md` lists every page in `doc/`, and its links work. |
 | `test_sales.py` | The sales simulator, clients and products, against [`doc/sales.md`](doc/sales.md), [`doc/client.md`](doc/client.md) and [`doc/product.md`](doc/product.md): buyers per category match PURCHASE_PROB; only EXITs trigger sales; each transaction names the exit's store, a client of the store's country and a product of the category at list price, at the exit's time; transaction IDs and offsets; the client and product scripts generate what the docs say (100,000 distinct clients, 120 products, ID formats, prices); 70% local buyers and 30% visitors, inverted at the flagships, with visitors from every country; the six categories agree everywhere; the sales source has the same envelope as the people source; the app has 18 probability sliders and writes sales after people. |
 | `test_people_stream.py` | The simulator app, against [`doc/people_stream.md`](doc/people_stream.md): 240 s per simulated day and 10 s per hour; START uses the current time and begins from scratch; a run finishes by itself after 48 simulated hours (480 s), and STOP quits the generator; slider range, step and default; daily visitors per store match each region's `N_AVG_PEOPLE`; events only during local opening hours; nobody stays longer than `max_stay_minutes` (90); the stay window has the average stay slider's mean and the measured average follows the slider; flagships get 45% more entries; people in = people out for every store and local day that reaches closing within the run; every event passes the silver rules; topic, partition per region and consecutive offsets; a failed write stops the run; the chart history is cumulative per region for entries and exits, never has more out than in, and ends at 48 hours; the charts are only on the Counters tab; the per-date bars sum people per store-local date and region; the headline and the browser tab title show the simulated hour only while running; every START first empties both source tables, before reading or writing anything. `shop_config.yml` holds every parameter, the simulator and app take them from it (no hard-coded values), the app shows them, and bad files are rejected. The insert is an insert-only `MERGE` on topic, partition and offset. The app bundle is separate from the pipeline bundle, grants exactly the table permissions the app uses, and pins its packages. The time-zone tests need `tzdata` on Windows and are skipped without it. |

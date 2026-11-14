@@ -1,0 +1,18 @@
+resources:
+  jobs:
+    retail_people_counter_continuous:
+      name: retail-people-counter-continuous-${bundle.target}
+      description: >-
+        Keeps the people-counter pipeline running, so it picks up every event the people-stream app writes.
+        Resume it after the full refresh that follows an app START; pause it before the next full refresh.
+        See readme.md, "Running the pipeline".
+      # Continuous: as soon as a pipeline update ends, the job starts the next one.
+      # Created paused (development mode pauses it on every deploy anyway): Resume it in the job's page.
+      continuous:
+        pause_status: PAUSED
+      tasks:
+        - task_key: run_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.retail_people_counter_bronze.id}
+            # No full_refresh here: it would empty and rebuild the tables on every update.
+            # The full refresh after an app START is a separate, manual pipeline run.
