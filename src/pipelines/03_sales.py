@@ -131,6 +131,9 @@ SILVER_SALES_SCHEMA = """
     transaction_timestamp TIMESTAMP_NTZ
         COMMENT 'Store local time of the transaction, without timezone conversion',
 
+    transaction_timestamp_utc TIMESTAMP_NTZ
+        COMMENT 'The same moment in UTC (GMT): transaction_timestamp converted from store_timezone_id',
+
     CONSTRAINT pk_silver_sales_transactions
         PRIMARY KEY (transaction_id),
 
@@ -205,6 +208,9 @@ QUARANTINE_SALES_SCHEMA = """
     transaction_timestamp TIMESTAMP_NTZ
         COMMENT 'Parsed transaction timestamp, when valid',
 
+    transaction_timestamp_utc TIMESTAMP_NTZ
+        COMMENT 'The same moment in UTC (GMT), when the timestamp and the store are valid',
+
     rejection_reason STRING
         COMMENT 'One or more validation errors separated by a pipe character',
 
@@ -270,6 +276,12 @@ def validated_sales():
             .join(stores, F.col("store_id") == F.col("_dim_store_id"), "left")
             .join(clients, F.col("client_id") == F.col("_dim_client_id"), "left")
             .join(products, F.col("product_id") == F.col("_dim_product_id"), "left")
+            # GMT translation of the local sale time, from the store's time zone. convert_timezone
+            # works on TIMESTAMP_NTZ wall clocks, so the result doesn't depend on the session time zone.
+            .withColumn(
+                "transaction_timestamp_utc",
+                F.expr("convert_timezone(store_timezone_id, 'UTC', transaction_timestamp)")
+            )
     )
 
     sales_rejection_reasons = [
@@ -367,7 +379,8 @@ def silver_sales_transactions():
                 "currency",
                 "transaction_timestamp_raw",
                 "store_timezone_id",
-                "transaction_timestamp"
+                "transaction_timestamp",
+                "transaction_timestamp_utc"
             )
     )
 
@@ -414,6 +427,7 @@ def quarantine_sales_transactions():
                 "transaction_timestamp_raw",
                 "store_timezone_id",
                 "transaction_timestamp",
+                "transaction_timestamp_utc",
                 "rejection_reason",
                 "record_status",
                 "quarantine_timestamp"

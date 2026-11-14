@@ -1,8 +1,10 @@
-"""Logic of the sales dashboard: KPIs, deltas, drill-down and chart series. Standard library only.
+"""Logic of the sales dashboard: KPIs, live deltas, drill-down and chart series. Standard library only.
 
-Works on the rows of the queries in dashboard_sql.py, as lists of dicts. See doc/sales_dashboard.md.
+Works on the rows of the queries in dashboard_sql.py, as lists of dicts. Times are GMT (UTC).
+See doc/sales_dashboard.md.
 """
 from dataclasses import replace
+from datetime import date, datetime, timedelta
 
 from dashboard_sql import Filters
 
@@ -14,11 +16,12 @@ KPIS = {
     "PEOPLE_IN": ("People in", "people"),
 }
 SALES_KPIS = ("VALUE", "QUANTITY", "AVG_PRICE")
-OPEN_HOUR, CLOSE_HOUR = 10, 20  # store opening hours (doc/dataset.md); the closing EXIT is at 20:00
+REGIONS = ("EUROPE", "AMERICAS", "ASIA")  # one trend line each
 TOP_MEMBERS = 15  # bars per breakdown chart
 
 GEO_PATH = ("REGION", "COUNTRY", "STORE")
 PRODUCT_PATH = ("CATEGORY", "PRODUCT")
+MEASURES = ("value", "quantity", "transactions", "people_in", "people_out", "row_count")
 
 
 # ------------------------------------------------------------------ rows
@@ -29,11 +32,11 @@ def normalize(rows):
     for r in rows:
         row = {}
         for k, v in r.items():
-            if k == "local_date":
+            if k == "utc_date":
                 row[k] = str(v)[:10] if v is not None else None
-            elif k in ("value", "quantity", "transactions", "people_in", "people_out", "row_count"):
+            elif k in MEASURES:
                 row[k] = float(v or 0)
-            elif k == "local_hour":
+            elif k == "utc_hour":
                 row[k] = int(v)
             else:
                 row[k] = v
@@ -42,21 +45,21 @@ def normalize(rows):
 
 
 def metric(row, kpi):
-    """One KPI from a row with value, quantity (and/or people_in)."""
+    """One KPI from a row with value, quantity (and/or people_in). AVG_PRICE is None without items."""
     if kpi == "VALUE":
         return row.get("value", 0.0)
     if kpi == "QUANTITY":
         return row.get("quantity", 0.0)
     if kpi == "AVG_PRICE":
         q = row.get("quantity", 0.0)
-        return row.get("value", 0.0) / q if q else 0.0
+        return row.get("value", 0.0) / q if q else None
     if kpi == "PEOPLE_IN":
         return row.get("people_in", 0.0)
     raise ValueError(f"unknown KPI {kpi!r}")
 
 
-def _add(acc, row, fields=("value", "quantity", "transactions", "people_in", "people_out")):
-    for f in fields:
+def _add(acc, row):
+    for f in MEASURES:
         if f in row:
             acc[f] = acc.get(f, 0.0) + row[f]
     return acc
@@ -72,36 +75,12 @@ def totals(sales_rows, people_rows):
     return {
         "VALUE": t["value"],
         "QUANTITY": t["quantity"],
-        "AVG_PRICE": metric(t, "AVG_PRICE"),
+        "AVG_PRICE": metric(t, "AVG_PRICE") or 0.0,
         "PEOPLE_IN": t["people_in"],
         "TRANSACTIONS": t["transactions"],
         "PEOPLE_OUT": t["people_out"],
         "ITEMS_PER_VISITOR": t["quantity"] / t["people_in"] if t["people_in"] else 0.0,
     }
-
-
-def like_for_like(sales_rows, people_rows, kpi):
-    """Latest store-local date vs the date before, over the same hours (up to the latest hour of the latest date).
-
-    Returns (current, previous, percent change) or None when there's no earlier date or nothing to compare.
-    """
-    rows = people_rows if kpi == "PEOPLE_IN" else sales_rows
-    dates = sorted({r["local_date"] for r in rows if r.get("local_date")})
-    if len(dates) < 2:
-        return None
-    latest, previous = dates[-1], dates[-2]
-    last_hour = max(r["local_hour"] for r in rows if r["local_date"] == latest)
-    cur, prev = {}, {}
-    for r in rows:
-        if r["local_hour"] <= last_hour:
-            if r["local_date"] == latest:
-                _add(cur, r)
-            elif r["local_date"] == previous:
-                _add(prev, r)
-    c, p = metric(cur, kpi), metric(prev, kpi)
-    if not p:
-        return None
-    return c, p, (c - p) / p * 100
 
 
 def live_delta(current, snapshot, signature):
@@ -120,42 +99,48 @@ def signature(filters):
 
 # ------------------------------------------------------------------ trend
 
-def trend_series(rows, kpi, cumulative=False):
-    """{date: (hours, values)}, one series per store-local date, hours OPEN_HOUR..CLOSE_HOUR.
+def _hour(row):
+    return datetime.combine(date.fromisoformat(row["utc_date"]), datetime.min.time()) + timedelta(hours=row["utc_hour"])
 
-    Hours without data count as 0 for value, quantity and people. Cumulative sums the hours within each date,
-    so each line grows through the day; for AVG_PRICE it's the running average (cumulative value / quantity).
+
+def trend_series(rows, kpi, cumulative=False):
+    """{region: (GMT hours, values)}: one line per macro region on one GMT timeline.
+
+    Every line covers every hour from the first to the last hour with data in any region, so the lines can be
+    compared hour by hour; an hour without data counts as 0 (the region's stores were closed). Cumulative adds up
+    from the first hour, so each line only grows; for AVG_PRICE it's the running average, and an hour without
+    items has no average (None, a gap in the line).
     """
-    by_date = {}
+    cells = {}
     for r in rows:
-        if r.get("local_date") is None:
+        if r.get("utc_date") is None or r.get("region") not in REGIONS:
             continue
-        hours = by_date.setdefault(r["local_date"], {})
-        _add(hours.setdefault(r["local_hour"], {}), r)
+        _add(cells.setdefault((r["region"], _hour(r)), {}), r)
+    if not cells:
+        return {}
+    hours = [h for _, h in cells]
+    first, last = min(hours), max(hours)
+    timeline = [first + timedelta(hours=i) for i in range(int((last - first).total_seconds() // 3600) + 1)]
     series = {}
-    for date in sorted(by_date):
-        hours = by_date[date]
-        last = max(hours)
-        xs, ys, acc = [], [], {}
-        for h in range(min(OPEN_HOUR, min(hours)), max(CLOSE_HOUR, last) + 1):
-            if h > last:
-                break  # the day hasn't reached this hour yet: stop the line, don't draw zeros
-            cell = hours.get(h, {})
+    for region in REGIONS:
+        if not any(reg == region for reg, _ in cells):
+            continue
+        acc, ys = {}, []
+        for h in timeline:
+            cell = cells.get((region, h), {})
             if cumulative:
                 _add(acc, cell)
-                y = metric(acc, kpi)
+                ys.append(metric(acc, kpi))
             else:
-                y = metric(cell, kpi)
-            xs.append(h)
-            ys.append(y)
-        series[date] = (xs, ys)
+                ys.append(metric(cell, kpi))
+        series[region] = (timeline, ys)
     return series
 
 
 # ------------------------------------------------------------------ breakdown charts
 
 def breakdown(rows, kpi, top=TOP_MEMBERS):
-    """Horizontal bars, cumulative per date: members ordered by total, and each member's value per date.
+    """Horizontal bars, cumulative per GMT date: members ordered by total, and each member's value per date.
 
     Returns (members, dates, {date: [value per member]}, hidden), members largest first, at most `top`;
     `hidden` is how many members were left out. For AVG_PRICE the segments don't add up, so it's one
@@ -164,12 +149,12 @@ def breakdown(rows, kpi, top=TOP_MEMBERS):
     per_member, per_cell = {}, {}
     for r in rows:
         _add(per_member.setdefault(r["member"], {}), r)
-        _add(per_cell.setdefault((r["member"], r["local_date"]), {}), r)
-    members = sorted(per_member, key=lambda m: (-metric(per_member[m], kpi), str(m)))
+        _add(per_cell.setdefault((r["member"], r["utc_date"]), {}), r)
+    members = sorted(per_member, key=lambda m: (-(metric(per_member[m], kpi) or 0.0), str(m)))
     hidden = max(0, len(members) - top)
     members = members[:top]
     if kpi == "AVG_PRICE":
-        return members, ["all dates"], {"all dates": [metric(per_member[m], kpi) for m in members]}, hidden
+        return members, ["all dates"], {"all dates": [metric(per_member[m], kpi) or 0.0 for m in members]}, hidden
     dates = sorted({d for (_, d) in per_cell if d is not None})
     values = {d: [metric(per_cell.get((m, d), {}), kpi) for m in members] for d in dates}
     return members, dates, values, hidden
@@ -249,11 +234,3 @@ def fmt_kpi(kpi, x):
 
 def fmt_delta(kpi, x):
     return ("+" if x >= 0 else "") + fmt_kpi(kpi, x)
-
-
-def fmt_pct(x):
-    return f"{'+' if x >= 0 else ''}{x:.2f}%"
-
-
-__all__ = ["Filters", "KPIS", "totals", "like_for_like", "live_delta", "trend_series", "breakdown",
-           "drill_down", "drill_up", "signature", "fmt_kpi", "fmt_delta", "fmt_pct", "normalize"]

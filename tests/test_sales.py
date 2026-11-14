@@ -90,6 +90,23 @@ class DimensionScriptTests(unittest.TestCase):
             low, high = base + step, base + 20 * step
             self.assertRegex(doc, rf"\| `{c}` \| {code} \| {label} \| 20 \| {low:,} – {high:,}, step {step} \|")
 
+    def test_average_transaction_is_about_1000_euro(self):
+        """Luxury price points: one item per transaction, so the average transaction is the average item price,
+        weighted by how often each category is bought (PURCHASE_PROB). doc/sales.md, "Purchase model"."""
+        probs = {"SHOES": 5, "BAGS": 2, "READY_TO_WEAR": 6, "ACCESSORIES": 3, "TRAVEL": 2, "SUNGLASSES": 2}
+        if sim is not None:
+            self.assertEqual(sim.PURCHASE_PROB_DEFAULTS["EUROPE"], probs)
+        mean = {c: b + 10.5 * s for c, _, _, b, s in _product_rows()}  # n = 1..20
+        average = sum(probs[c] * mean[c] for c in probs) / sum(probs.values())
+        self.assertAlmostEqual(average, 1012.225, places=3)
+        self.assertIn("≈ 1,012 EUR", read_text("doc", "sales.md"))
+        self.assertGreaterEqual(min(b + s for *_, b, s in _product_rows()), 200, "luxury: no item under 200 EUR")
+
+    def test_product_load_reprices_existing_products(self):
+        sql = read_text(*SQL, "11_populate_dim_product.sql")
+        self.assertIn("WHEN MATCHED AND NOT (target.list_price <=> source.list_price) THEN UPDATE SET", sql)
+        self.assertIn("'EUR'", sql)
+
     def test_categories_agree_everywhere(self):
         expected = list(CATEGORY_CODES)
         self.assertEqual(list(shop_config.CATEGORIES) if sim else expected, expected)

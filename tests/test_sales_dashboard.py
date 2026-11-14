@@ -31,13 +31,14 @@ def _all_queries(f):
     yield q.products_sql()
 
 
-def _sales(date, hour, value, quantity=1):
-    return {"local_date": date, "local_hour": hour, "value": float(value), "quantity": float(quantity),
+def _sales(date, hour, value, quantity=1, region="EUROPE"):
+    return {"region": region, "utc_date": date, "utc_hour": hour, "value": float(value), "quantity": float(quantity),
             "transactions": float(quantity)}
 
 
-def _people(date, hour, people_in, people_out=0):
-    return {"local_date": date, "local_hour": hour, "people_in": float(people_in), "people_out": float(people_out)}
+def _people(date, hour, people_in, people_out=0, region="EUROPE"):
+    return {"region": region, "utc_date": date, "utc_hour": hour, "people_in": float(people_in),
+            "people_out": float(people_out)}
 
 
 class QueryTests(unittest.TestCase):
@@ -80,7 +81,7 @@ class QueryTests(unittest.TestCase):
 
     def test_every_filter_reaches_the_sales_queries(self):
         sql, params = q.sales_trend_sql(self.FULL)
-        for clause in ("CAST(s.transaction_timestamp AS DATE) IN (CAST(:date_0 AS DATE), CAST(:date_1 AS DATE))",
+        for clause in ("CAST(s.transaction_timestamp_utc AS DATE) IN (CAST(:date_0 AS DATE), CAST(:date_1 AS DATE))",
                        "d.macro_region IN (:region_0)", "d.country_code IN (:country_0)", "d.store_id IN (:store_0)",
                        "s.category IN (:category_0)", "s.product_id IN (:product_0)", "d.is_flagship"):
             self.assertIn(clause, sql)
@@ -93,14 +94,20 @@ class QueryTests(unittest.TestCase):
         self.assertNotIn("category", sql)
         self.assertNotIn("product", sql)
         self.assertIn("d.store_id IN (:store_0)", sql)
-        self.assertIn("CAST(s.event_timestamp AS DATE)", sql)
+        self.assertIn("CAST(convert_timezone(d.timezone_id, 'UTC', s.event_timestamp) AS DATE) IN", sql)
 
-    def test_grouped_by_store_local_date_and_hour(self):
+    def test_grouped_by_region_and_gmt_date_and_hour(self):
+        """One GMT timeline: sales use silver's transaction_timestamp_utc, people are converted the same way."""
         sql, _ = q.sales_trend_sql(q.Filters())
-        self.assertIn("CAST(s.transaction_timestamp AS DATE) AS local_date, HOUR(s.transaction_timestamp) AS local_hour",
-                      sql)
+        self.assertIn("SELECT d.macro_region AS region, CAST(s.transaction_timestamp_utc AS DATE) AS utc_date, "
+                      "HOUR(s.transaction_timestamp_utc) AS utc_hour", sql)
+        self.assertIn("GROUP BY 1, 2, 3", sql)
         self.assertIn("SUM(s.amount) AS value, SUM(s.quantity) AS quantity", sql)
-        self.assertIn("event_type = 'ENTRY'", q.people_trend_sql(q.Filters())[0])
+        people, _ = q.people_trend_sql(q.Filters())
+        self.assertIn("HOUR(convert_timezone(d.timezone_id, 'UTC', s.event_timestamp)) AS utc_hour", people)
+        self.assertIn("event_type = 'ENTRY'", people)
+        for other, _ in _all_queries(q.Filters()):
+            self.assertNotRegex(other, r"CAST\(s\.(transaction|event)_timestamp AS DATE\)", "local dates are gone")
 
     def test_table_names_are_checked(self):
         os.environ["SALES_TABLE"] = "a.b; DROP"
@@ -120,15 +127,6 @@ class KpiTests(unittest.TestCase):
         self.assertAlmostEqual(t["ITEMS_PER_VISITOR"], 0.1)
         self.assertEqual(bi.totals([], [])["AVG_PRICE"], 0)
 
-    def test_like_for_like_compares_the_same_hours(self):
-        sales = [_sales("2026-11-13", h, 100) for h in range(10, 21)] + [_sales("2026-11-14", h, 150) for h in (10, 11)]
-        cur, prev, pct = bi.like_for_like(sales, [], "VALUE")
-        self.assertEqual((cur, prev), (300, 200), "only hours 10 and 11 of the earlier date")
-        self.assertAlmostEqual(pct, 50)
-        self.assertIsNone(bi.like_for_like(sales[:3], [], "VALUE"), "one date: nothing to compare")
-        people = [_people("2026-11-13", 10, 40), _people("2026-11-14", 10, 30)]
-        self.assertAlmostEqual(bi.like_for_like([], people, "PEOPLE_IN")[2], -25)
-
     def test_live_delta_only_with_the_same_filters(self):
         f = q.Filters(regions=("ASIA",))
         sig = bi.signature(f)
@@ -145,33 +143,44 @@ class KpiTests(unittest.TestCase):
         self.assertEqual(bi.fmt_kpi("QUANTITY", 179_300), "179.30 K")
         self.assertEqual(bi.fmt_kpi("AVG_PRICE", 41), "€ 41.00")
         self.assertEqual(bi.fmt_delta("QUANTITY", -179_300), "-179.30 K")
-        self.assertEqual(bi.fmt_pct(0.49), "+0.49%")
 
     def test_normalize(self):
         from datetime import date
         from decimal import Decimal
-        row = bi.normalize([{"local_date": date(2026, 11, 14), "local_hour": 15, "value": Decimal("12.50"),
+        row = bi.normalize([{"utc_date": date(2026, 11, 14), "utc_hour": 15, "value": Decimal("12.50"),
                              "quantity": None}])[0]
-        self.assertEqual(row, {"local_date": "2026-11-14", "local_hour": 15, "value": 12.5, "quantity": 0.0})
+        self.assertEqual(row, {"utc_date": "2026-11-14", "utc_hour": 15, "value": 12.5, "quantity": 0.0})
 
 
 class ChartTests(unittest.TestCase):
 
-    def test_trend_one_line_per_date_up_to_the_latest_hour(self):
-        rows = [_sales("2026-11-13", h, 10) for h in range(10, 21)] + [_sales("2026-11-14", 10, 5),
-                                                                        _sales("2026-11-14", 12, 7)]
+    def test_trend_one_line_per_macro_region_on_one_gmt_timeline(self):
+        from datetime import datetime
+        rows = [_sales("2026-11-13", 22, 10, region="AMERICAS"), _sales("2026-11-13", 23, 5, region="AMERICAS"),
+                _sales("2026-11-14", 1, 7, region="ASIA"), _sales("2026-11-14", 1, 3, region="ASIA")]
         series = bi.trend_series(rows, "VALUE")
-        self.assertEqual(list(series), ["2026-11-13", "2026-11-14"])
-        self.assertEqual(series["2026-11-13"][0], list(range(10, 21)))
-        self.assertEqual(series["2026-11-14"], ([10, 11, 12], [5, 0, 7]), "a missing hour is 0; no line after 12")
+        self.assertEqual(list(series), ["AMERICAS", "ASIA"], "regions in fixed order, only those with data")
+        hours = [datetime(2026, 11, 13, 22), datetime(2026, 11, 13, 23), datetime(2026, 11, 14, 0),
+                 datetime(2026, 11, 14, 1)]
+        self.assertEqual(series["AMERICAS"], (hours, [10, 5, 0, 0]), "across midnight GMT; closed hours are 0")
+        self.assertEqual(series["ASIA"], (hours, [0, 0, 0, 10]), "same timeline for every region")
+        self.assertEqual(bi.trend_series([], "VALUE"), {})
 
-    def test_trend_cumulative_grows_through_the_day(self):
-        rows = [_sales("2026-11-14", 10, 100, 1), _sales("2026-11-14", 11, 300, 1)]
-        self.assertEqual(bi.trend_series(rows, "VALUE", cumulative=True)["2026-11-14"][1], [100, 400])
-        self.assertEqual(bi.trend_series(rows, "AVG_PRICE", cumulative=True)["2026-11-14"][1], [100, 200])
+    def test_trend_cumulative_grows_through_the_run(self):
+        rows = [_sales("2026-11-13", 23, 100, 1), _sales("2026-11-14", 1, 300, 1)]
+        self.assertEqual(bi.trend_series(rows, "VALUE", cumulative=True)["EUROPE"][1], [100, 100, 400])
+        self.assertEqual(bi.trend_series(rows, "AVG_PRICE", cumulative=True)["EUROPE"][1], [100, 100, 200])
+        self.assertEqual(bi.trend_series(rows, "AVG_PRICE")["EUROPE"][1], [100, None, 300],
+                         "no items, no average: a gap, not a drop to 0")
+
+    def test_region_lines_have_distinct_colours(self):
+        consts = constants(parse(*APP, "app", "figures.py"))
+        colours = consts["REGION_COLORS"]
+        self.assertEqual(set(colours), set(bi.REGIONS))
+        self.assertEqual(len(set(colours.values())), 3)
 
     def test_breakdown_cumulative_per_date(self):
-        rows = [{"member": m, "local_date": d, "value": float(v), "quantity": 1.0}
+        rows = [{"member": m, "utc_date": d, "value": float(v), "quantity": 1.0}
                 for m, d, v in (("SHOES", "2026-11-13", 10), ("SHOES", "2026-11-14", 50), ("BAGS", "2026-11-13", 40))]
         members, dates, values, hidden = bi.breakdown(rows, "VALUE")
         self.assertEqual(members, ["SHOES", "BAGS"], "largest total first")
@@ -183,7 +192,7 @@ class ChartTests(unittest.TestCase):
                          "average price over all dates: shoes (10 + 50) / 2, bags 40 / 1")
 
     def test_breakdown_keeps_the_top_members(self):
-        rows = [{"member": f"S{i:02d}", "local_date": "2026-11-14", "value": float(i), "quantity": 1.0}
+        rows = [{"member": f"S{i:02d}", "utc_date": "2026-11-14", "value": float(i), "quantity": 1.0}
                 for i in range(40)]
         members, _, _, hidden = bi.breakdown(rows, "VALUE")
         self.assertEqual((len(members), hidden, members[0]), (bi.TOP_MEMBERS, 40 - bi.TOP_MEMBERS, "S39"))
@@ -230,7 +239,7 @@ class AppTests(unittest.TestCase):
                 ast.parse(read_text(*APP, "app", f), filename=f)
 
     def test_logic_modules_use_the_standard_library_only(self):
-        allowed = {"os", "re", "dataclasses", "dashboard_sql"}
+        allowed = {"os", "re", "dataclasses", "datetime", "dashboard_sql"}
         for f in ("bi.py", "dashboard_sql.py"):
             for node in ast.walk(parse(*APP, "app", f)):
                 if isinstance(node, ast.Import):
@@ -248,6 +257,22 @@ class AppTests(unittest.TestCase):
         self.assertIn("title=APP_TITLE, update_title=None", code)
         self.assertNotIn("document.title", code)
         self.assertNotIn("clientside_callback", code)
+
+    def test_no_previous_day_comparison(self):
+        code = read_text(*APP, "app", "app.py") + read_text(*APP, "app", "bi.py")
+        for gone in ("like_for_like", "VS PREV", "fmt_pct"):
+            self.assertNotIn(gone, code)
+
+    def test_compact_layout_with_side_margins(self):
+        """5% white space at each side on phones, 7.5% on tablets and laptops, 10% on large screens."""
+        css = read_text(*APP, "app", "assets", "dashboard.css")
+        self.assertIn(".page { padding: 8px 5vw 12px 5vw; }", css)
+        self.assertIn("@media (min-width: 768px)  { .page { padding-left: 7.5vw; padding-right: 7.5vw; } }", css)
+        self.assertIn("@media (min-width: 1400px) { .page { padding-left: 10vw; padding-right: 10vw; } }", css)
+        code = read_text(*APP, "app", "app.py")
+        self.assertIn('className="page"', code)
+        self.assertIn('"name": "viewport"', code, "phones render at device width")
+        self.assertIn("xs=12", code, "columns stack on phones")
 
     def test_refreshes_every_few_seconds(self):
         code = read_text(*APP, "app", "app.py")
@@ -322,8 +347,9 @@ class DocTests(unittest.TestCase):
     def test_doc_describes_the_screen_and_the_rules(self):
         doc = read_text("doc", "sales_dashboard.md")
         for text in ("`silver_sales_transactions`", "`silver_people_counter_events`", "every 5 seconds",
-                     "Area → Country → Store", "Merch. category → Product", "like-for-like", "`update_title=None`",
-                     "`sales-bi-<user>`", "ITEMS PER VISITOR"):
+                     "Area → Country → Store", "Merch. category → Product", "`update_title=None`",
+                     "`sales-bi-<user>`", "ITEMS PER VISITOR", "one line per macro region", "`transaction_timestamp_utc`",
+                     "5% of the width on phones"):
             self.assertIn(text, doc)
 
 

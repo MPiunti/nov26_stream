@@ -25,8 +25,11 @@ class Warehouse:
         if not warehouse_id:
             raise RuntimeError("DATABRICKS_WAREHOUSE_ID is not set. Check the app's sql-warehouse resource.")
         cfg = Config()
+        # Session time zone UTC: TIMESTAMP columns (ingestion_timestamp) come back in GMT, like the rest of
+        # the screen. The GMT sale and event times are TIMESTAMP_NTZ and don't depend on it.
         return dbsql.connect(server_hostname=cfg.host, http_path=f"/sql/1.0/warehouses/{warehouse_id}",
-                             credentials_provider=lambda: cfg.authenticate)
+                             credentials_provider=lambda: cfg.authenticate,
+                             session_configuration={"TIMEZONE": "UTC"})
 
     def _close(self):
         conn = getattr(self._local, "conn", None)

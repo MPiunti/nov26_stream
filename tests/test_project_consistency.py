@@ -217,6 +217,15 @@ class PipelineCodeTests(unittest.TestCase):
         self.assertRegex(code, r'spark\.readStream\s*\.option\("skipChangeCommits", "true"\)\s*'
                                r'\.table\(SALES_SOURCE_TABLE\)')
 
+    def test_silver_sales_has_the_gmt_time(self):
+        """The local sale time is kept, and translated to GMT from the store's time zone."""
+        code = read_text(SALES_FILE)
+        self.assertIn("convert_timezone(store_timezone_id, 'UTC', transaction_timestamp)", code)
+        consts = constants(parse(SALES_FILE))
+        for schema in ("SILVER_SALES_SCHEMA", "QUARANTINE_SALES_SCHEMA"):
+            self.assertRegex(consts[schema], r"transaction_timestamp TIMESTAMP_NTZ")
+            self.assertRegex(consts[schema], r"transaction_timestamp_utc TIMESTAMP_NTZ")
+
     def test_sales_tables(self):
         self.assertEqual(set(pipeline_tables(parse(SALES_FILE))),
                          {"bronze_sales_transactions", "silver_sales_transactions", "quarantine_sales_transactions"})

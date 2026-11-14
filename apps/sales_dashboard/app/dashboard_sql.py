@@ -30,10 +30,16 @@ def table(var):
     return name
 
 
+# GMT (UTC) time of each row, as a TIMESTAMP_NTZ wall clock. Sales carry it in silver; people events are
+# converted here from the store's time zone, the same way 03_sales.py does it.
+SALES_UTC = "s.transaction_timestamp_utc"
+PEOPLE_UTC = "convert_timezone(d.timezone_id, 'UTC', s.event_timestamp)"
+
+
 @dataclass(frozen=True)
 class Filters:
     """What the viewer selected. Empty tuple = no filter on that field."""
-    dates: tuple = ()       # store-local dates, YYYY-MM-DD
+    dates: tuple = ()       # GMT (UTC) calendar dates, YYYY-MM-DD
     regions: tuple = ()     # dim_store.macro_region
     countries: tuple = ()   # dim_store.country_code
     stores: tuple = ()      # dim_store.store_id
@@ -58,11 +64,11 @@ def _in(column, name, values, params, cast=None):
     return f"{column} IN ({', '.join(markers)})"
 
 
-def where(f, ts_column, sales=True):
+def where(f, utc_column, sales=True):
     """WHERE clause and parameters for the filters. People events have no category or product."""
     clauses, params = [], {}
     if f.dates:
-        clauses.append(_in(f"CAST({ts_column} AS DATE)", "date", f.dates, params, cast="DATE"))
+        clauses.append(_in(f"CAST({utc_column} AS DATE)", "date", f.dates, params, cast="DATE"))
     for column, name, values in (("d.macro_region", "region", f.regions), ("d.country_code", "country", f.countries),
                                  ("d.store_id", "store", f.stores)):
         if values:
@@ -92,36 +98,33 @@ PEOPLE_MEASURES = ("SUM(CASE WHEN s.event_type = 'ENTRY' THEN s.people_count ELS
                    "SUM(CASE WHEN s.event_type = 'EXIT' THEN s.people_count ELSE 0 END) AS people_out")
 
 
-def sales_trend_sql(f):
-    """Sales per store-local date and hour: feeds the KPI cards and the trend chart."""
-    clause, params = where(f, "s.transaction_timestamp")
-    sql = f"""SELECT CAST(s.transaction_timestamp AS DATE) AS local_date, HOUR(s.transaction_timestamp) AS local_hour,
-  {SALES_MEASURES}
-{_sales_from()}
+def _trend(utc, measures, frm, clause):
+    return f"""SELECT d.macro_region AS region, CAST({utc} AS DATE) AS utc_date, HOUR({utc}) AS utc_hour,
+  {measures}
+{frm}
 {clause}
-GROUP BY 1, 2
-ORDER BY 1, 2"""
-    return sql, params
+GROUP BY 1, 2, 3
+ORDER BY 2, 3, 1"""
+
+
+def sales_trend_sql(f):
+    """Sales per macro region and GMT date and hour: feeds the KPI cards and the trend lines."""
+    clause, params = where(f, SALES_UTC)
+    return _trend(SALES_UTC, SALES_MEASURES, _sales_from(), clause), params
 
 
 def people_trend_sql(f):
-    """People in and out per store-local date and hour. The category and product filters don't apply."""
-    clause, params = where(f, "s.event_timestamp", sales=False)
-    sql = f"""SELECT CAST(s.event_timestamp AS DATE) AS local_date, HOUR(s.event_timestamp) AS local_hour,
-  {PEOPLE_MEASURES}
-{_people_from()}
-{clause}
-GROUP BY 1, 2
-ORDER BY 1, 2"""
-    return sql, params
+    """People in and out per macro region and GMT date and hour. The category and product filters don't apply."""
+    clause, params = where(f, PEOPLE_UTC, sales=False)
+    return _trend(PEOPLE_UTC, PEOPLE_MEASURES, _people_from(), clause), params
 
 
 def sales_breakdown_sql(f, column):
-    """Sales per member of a drill level (GEO_LEVELS or PRODUCT_LEVELS column) and store-local date."""
+    """Sales per member of a drill level (GEO_LEVELS or PRODUCT_LEVELS column) and GMT date."""
     if column not in GEO_LEVELS.values() and column not in PRODUCT_LEVELS.values():
         raise ValueError(f"bad level column {column!r}")
-    clause, params = where(f, "s.transaction_timestamp")
-    sql = f"""SELECT {column} AS member, CAST(s.transaction_timestamp AS DATE) AS local_date,
+    clause, params = where(f, SALES_UTC)
+    sql = f"""SELECT {column} AS member, CAST({SALES_UTC} AS DATE) AS utc_date,
   {SALES_MEASURES}
 {_sales_from()}
 {clause}
@@ -130,11 +133,11 @@ GROUP BY 1, 2"""
 
 
 def people_breakdown_sql(f, column):
-    """People per geography member and store-local date."""
+    """People per geography member and GMT date."""
     if column not in GEO_LEVELS.values():
         raise ValueError(f"bad level column {column!r}")
-    clause, params = where(f, "s.event_timestamp", sales=False)
-    sql = f"""SELECT {column} AS member, CAST(s.event_timestamp AS DATE) AS local_date,
+    clause, params = where(f, PEOPLE_UTC, sales=False)
+    sql = f"""SELECT {column} AS member, CAST({PEOPLE_UTC} AS DATE) AS utc_date,
   {PEOPLE_MEASURES}
 {_people_from()}
 {clause}
@@ -143,16 +146,17 @@ GROUP BY 1, 2"""
 
 
 def freshness_sql():
-    """Latest rows of both silver tables, unfiltered: the footer and the store-local dates on offer."""
-    sales, people = table("SALES_TABLE"), table("PEOPLE_TABLE")
-    sql = f"""SELECT 'SALES' AS stream, CAST(transaction_timestamp AS DATE) AS local_date,
-  COUNT(*) AS row_count, MAX(ingestion_timestamp) AS last_ingested, MAX(transaction_timestamp) AS last_local
-FROM {sales}
+    """Latest rows of both silver tables, unfiltered: the footer and the GMT dates on offer."""
+    sales, people, store = table("SALES_TABLE"), table("PEOPLE_TABLE"), table("STORE_TABLE")
+    sql = f"""SELECT 'SALES' AS stream, CAST({SALES_UTC} AS DATE) AS utc_date,
+  COUNT(*) AS row_count, MAX(s.ingestion_timestamp) AS last_ingested, MAX({SALES_UTC}) AS last_utc
+FROM {sales} s
 GROUP BY 1, 2
 UNION ALL
-SELECT 'PEOPLE', CAST(event_timestamp AS DATE),
-  COUNT(*), MAX(ingestion_timestamp), MAX(event_timestamp)
-FROM {people}
+SELECT 'PEOPLE', CAST({PEOPLE_UTC} AS DATE),
+  COUNT(*), MAX(s.ingestion_timestamp), MAX({PEOPLE_UTC})
+FROM {people} s
+JOIN {store} d ON s.store_id = d.store_id
 GROUP BY 1, 2"""
     return sql, {}
 

@@ -5,16 +5,20 @@
 --
 -- 20 products per merchandise category, 120 in total.
 -- product_id = <code>-<4-digit number>; list_price = base + n * step.
+-- Luxury price points: about 1,000 EUR per transaction on average
+-- (doc/sales.md, "Purchase model").
 --
 --   Category        Code  Base   Step   Price range (EUR)
---   SHOES           SH     400    20      420 -   800
---   BAGS            BG     900    60      960 - 2,100
---   READY_TO_WEAR   RW     300    40      340 - 1,100
---   ACCESSORIES     AC     150    15      165 -   450
---   TRAVEL          TR     700    50      750 - 1,700
---   SUNGLASSES      SG     200    10      210 -   400
+--   SHOES           SH     550    25      575 - 1,050
+--   BAGS            BG   1,300    80    1,380 - 2,900
+--   READY_TO_WEAR   RW     550    50      600 - 1,550
+--   ACCESSORIES     AC     200    20      220 -   600
+--   TRAVEL          TR   1,000    70    1,070 - 2,400
+--   SUNGLASSES      SG     250    12      262 -   490
 --
--- Idempotent: MERGE by natural product_id, insert only.
+-- Idempotent: MERGE by natural product_id. New products are inserted;
+-- an existing product whose list price differs gets the new price
+-- (a dimension, not a streaming source, so updates are allowed).
 -- Rules: doc/product.md.
 -- ============================================================
 
@@ -24,12 +28,12 @@ USING (
     WITH categories AS (
         SELECT *
         FROM VALUES
-            ('SHOES', 'SH', 'Shoes', 400, 20),
-            ('BAGS', 'BG', 'Bag', 900, 60),
-            ('READY_TO_WEAR', 'RW', 'Ready-to-wear', 300, 40),
-            ('ACCESSORIES', 'AC', 'Accessory', 150, 15),
-            ('TRAVEL', 'TR', 'Travel', 700, 50),
-            ('SUNGLASSES', 'SG', 'Sunglasses', 200, 10)
+            ('SHOES', 'SH', 'Shoes', 550, 25),
+            ('BAGS', 'BG', 'Bag', 1300, 80),
+            ('READY_TO_WEAR', 'RW', 'Ready-to-wear', 550, 50),
+            ('ACCESSORIES', 'AC', 'Accessory', 200, 20),
+            ('TRAVEL', 'TR', 'Travel', 1000, 70),
+            ('SUNGLASSES', 'SG', 'Sunglasses', 250, 12)
         AS c(category, code, label, base_price, price_step)
     )
 
@@ -43,6 +47,10 @@ USING (
 ) AS source
 
 ON target.product_id = source.product_id
+
+-- Price list change: reprice existing products.
+WHEN MATCHED AND NOT (target.list_price <=> source.list_price) THEN UPDATE SET
+    target.list_price = source.list_price
 
 WHEN NOT MATCHED THEN INSERT (
     product_id,

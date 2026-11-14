@@ -1,0 +1,20 @@
+/* Sales dashboard: compact layout with white space at the sides (doc/sales_dashboard.md, "Screen").
+   Dash serves every file in assets/ automatically. */
+
+body { background: #fff; font-size: 12px; }
+
+/* Side margins: 5% of the width on phones, 7.5% on tablets and laptops, 10% on large screens. */
+.page { padding: 8px 5vw 12px 5vw; }
+@media (min-width: 768px)  { .page { padding-left: 7.5vw; padding-right: 7.5vw; } }
+@media (min-width: 1400px) { .page { padding-left: 10vw; padding-right: 10vw; } }
+
+/* Compact controls. */
+.filters .Select-control { min-height: 28px; height: 28px; }
+.filters .Select-placeholder, .filters .Select-value { line-height: 26px !important; }
+.filters .Select-multi-value-wrapper { font-size: 11px; }
+.filters .btn, .level .btn { font-size: 11px; padding: 2px 8px; }
+.filters .form-check { padding-left: 0; margin-right: 2px; }
+.level .form-check { display: inline-block; padding-left: 0; margin: 0 4px 4px 0; }
+.kpi-value { font-size: 1.25rem; line-height: 1.6rem; font-weight: 500; }
+.kpi-label, .tiny { font-size: 10px; letter-spacing: 0.02em; }
+.panel-title { font-size: 11px; font-weight: 600; }

@@ -2,7 +2,7 @@
 
 Read-only: it queries silver_sales_transactions, silver_people_counter_events and the dimensions through the
 SQL warehouse, and refreshes every REFRESH_SECONDS. No coupling with the people-stream app or the pipeline.
-See doc/sales_dashboard.md.
+Times are GMT (UTC). Layout and sizes: assets/dashboard.css. See doc/sales_dashboard.md.
 """
 import os
 import threading
@@ -29,14 +29,17 @@ CARD_LABEL = {"VALUE": "VALUE", "QUANTITY": "QUANTITY", "AVG_PRICE": "AVG PRICE"
               "ITEMS_PER_VISITOR": "ITEMS PER VISITOR"}
 
 SIDEBAR_BG, CARD_BG = "#cfe2f0", "#f2f2f2"
-GOOD, BAD = "#5cb85c", "#d9534f"
+GOOD, BAD = "#4a9d4a", "#d9534f"
+BUTTONS = dict(input_class_name="btn-check", label_class_name="btn btn-light btn-sm",
+               label_checked_class_name="active btn-dark text-white")
 
 wh = sql_warehouse.Warehouse()
 
 # The browser tab title is fixed: update_title=None stops Dash from showing "Updating..." during the
 # refresh callbacks, and nothing on the page changes the title afterwards.
 APP_TITLE = "Sales BI dashboard"
-app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], title=APP_TITLE, update_title=None)
+app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], title=APP_TITLE, update_title=None,
+           meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}])
 server = app.server
 
 
@@ -76,26 +79,20 @@ dims = Dimensions()
 # ------------------------------------------------------------------ layout
 
 def label(text):
-    return html.Div(text, className="small fw-semibold mt-3 mb-1 text-uppercase")
-
-
-def chips(component_id, options):
-    """Multi-select toggle buttons, as in the reference layout."""
-    return dbc.Checklist(id=component_id, options=options, value=[], inline=True,
-                         input_class_name="btn-check", label_class_name="btn btn-light btn-sm mb-1 me-1",
-                         label_checked_class_name="active btn-dark text-white")
+    return html.Div(text, className="tiny fw-semibold mt-2 mb-1 text-uppercase")
 
 
 def sidebar():
     return html.Div([
-        html.H5("FILTER AREA", className="text-center mb-2"),
+        html.Div("FILTER AREA", className="panel-title text-center"),
         label("KPI on charts"),
         dcc.Dropdown(id="kpi", options=[{"label": v[0], "value": k} for k, v in bi.KPIS.items()],
-                     value="VALUE", clearable=False),
-        label("Store-local dates"),
+                     value="VALUE", clearable=False, searchable=False),
+        label("GMT dates"),
         dcc.Dropdown(id="dates", multi=True, placeholder="All dates"),
         label("Macro region"),
-        chips("regions", [{"label": REGION_LABEL[r], "value": r} for r in REGIONS]),
+        dbc.Checklist(id="regions", value=[], inline=True,
+                      options=[{"label": REGION_LABEL[r], "value": r} for r in REGIONS], **BUTTONS),
         label("Country"),
         dcc.Dropdown(id="countries", multi=True, placeholder="All countries"),
         label("Store"),
@@ -103,66 +100,59 @@ def sidebar():
         label("Store type"),
         dbc.RadioItems(id="store-type", value="ALL", inline=True,
                        options=[{"label": "All", "value": "ALL"}, {"label": "Flagships", "value": "FLAGSHIP"},
-                                {"label": "Others", "value": "OTHER"}],
-                       input_class_name="btn-check", label_class_name="btn btn-light btn-sm mb-1 me-1",
-                       label_checked_class_name="active btn-dark text-white"),
+                                {"label": "Others", "value": "OTHER"}], **BUTTONS),
         label("Merch. category"),
-        chips("categories", [{"label": CATEGORY_LABEL[c], "value": c} for c in CATEGORIES]),
-        html.Hr(),
-        dbc.Switch(id="live", value=True, label=f"Live: refresh every {REFRESH_SECONDS} s"),
-        dbc.Button("Reset filters", id="reset", color="secondary", outline=True, size="sm", className="w-100 mt-2"),
-    ], style={"background": SIDEBAR_BG, "borderRadius": "6px", "padding": "14px", "minHeight": "100%"})
+        dbc.Checklist(id="categories", value=[], inline=True,
+                      options=[{"label": CATEGORY_LABEL[c], "value": c} for c in CATEGORIES], **BUTTONS),
+        dbc.Switch(id="live", value=True, label=f"Live, every {REFRESH_SECONDS} s", className="mt-2 tiny"),
+        dbc.Button("Reset filters", id="reset", color="secondary", outline=True, size="sm", className="w-100 mt-1"),
+    ], className="filters", style={"background": SIDEBAR_BG, "borderRadius": "6px", "padding": "8px 10px"})
 
 
 def panel(children, **style):
-    return html.Div(children, style={"background": CARD_BG, "borderRadius": "6px", "padding": "10px", **style})
-
-
-def level_buttons(component_id, options, value, up_id):
-    return html.Div([
-        html.Div("SELECT THE CHART FIELDS", className="small text-center fw-semibold mb-2"),
-        dbc.RadioItems(id=component_id, value=value, options=[{"label": v, "value": k} for k, v in options.items()],
-                       input_class_name="btn-check", label_class_name="btn btn-light w-100 mb-2 py-3 small",
-                       label_checked_class_name="active btn-dark text-white"),
-        dbc.Button("▲ Up", id=up_id, color="secondary", outline=True, size="sm", className="w-100"),
-    ], style={"width": "140px", "flexShrink": 0})
+    return html.Div(children, style={"background": CARD_BG, "borderRadius": "6px", "padding": "6px 8px", **style})
 
 
 def breakdown_panel(prefix, levels, value):
-    return panel(html.Div([
-        level_buttons(f"{prefix}-level", levels, value, f"{prefix}-up"),
+    return panel([
         html.Div([
-            html.Div(id=f"{prefix}-title", className="text-center fw-semibold"),
-            html.Div(id=f"{prefix}-path", className="text-center small text-muted mb-1"),
-            dcc.Graph(id=f"{prefix}-chart", config={"displayModeBar": False}),
-        ], style={"flexGrow": 1, "minWidth": 0}),
-    ], style={"display": "flex", "gap": "12px"}), height="100%")
+            html.Div(id=f"{prefix}-title", className="panel-title"),
+            html.Div(id=f"{prefix}-path", className="tiny text-muted text-end"),
+        ], className="d-flex justify-content-between flex-wrap gap-1"),
+        html.Div([
+            dbc.RadioItems(id=f"{prefix}-level", value=value, inline=True,
+                           options=[{"label": v, "value": k} for k, v in levels.items()], **BUTTONS),
+            dbc.Button("▲ Up", id=f"{prefix}-up", color="secondary", outline=True, size="sm", className="mb-1"),
+        ], className="level d-flex flex-wrap align-items-center mt-1"),
+        dcc.Graph(id=f"{prefix}-chart", config={"displayModeBar": False}),
+    ], height="100%")
 
 
-app.layout = dbc.Container([
+app.layout = html.Div([
     dbc.Row([
-        dbc.Col(sidebar(), lg=2, md=3, className="py-2"),
+        dbc.Col(sidebar(), xs=12, md=3, xl=2, className="mb-2"),
         dbc.Col([
             html.Div(id="alert"),
-            dbc.Row([dbc.Col(html.Div(id=f"card-{k}"), className="py-2") for k in CARDS], className="g-2"),
+            dbc.Row([dbc.Col(html.Div(id=f"card-{k}"), xs=6, sm=4, lg=True, className="mb-2") for k in CARDS],
+                    className="g-2"),
             panel([
                 html.Div([
-                    html.Div(id="trend-title", className="fw-semibold"),
-                    dbc.Switch(id="cumulative", value=True, label="Cumulative through the day", className="small"),
-                ], className="d-flex justify-content-between"),
+                    html.Div(id="trend-title", className="panel-title"),
+                    dbc.Switch(id="cumulative", value=True, label="Cumulative", className="tiny mb-0"),
+                ], className="d-flex justify-content-between align-items-center flex-wrap"),
                 dcc.Graph(id="trend", config={"displayModeBar": False}),
             ], marginBottom="8px"),
             dbc.Row([
-                dbc.Col(breakdown_panel("geo", GEO_LEVEL_LABEL, "REGION"), lg=6, className="mb-2"),
-                dbc.Col(breakdown_panel("product", PRODUCT_LEVEL_LABEL, "CATEGORY"), lg=6, className="mb-2"),
+                dbc.Col(breakdown_panel("geo", GEO_LEVEL_LABEL, "REGION"), xs=12, lg=6, className="mb-2"),
+                dbc.Col(breakdown_panel("product", PRODUCT_LEVEL_LABEL, "CATEGORY"), xs=12, lg=6, className="mb-2"),
             ], className="g-2"),
-            html.Div(id="footer", className="small text-end text-uppercase text-muted pb-2"),
-        ], lg=10, md=9),
+            html.Div(id="footer", className="tiny text-end text-uppercase text-muted"),
+        ], xs=12, md=9, xl=10),
     ], className="g-2"),
     dcc.Interval(id="refresh", interval=REFRESH_SECONDS * 1000),
     dcc.Store(id="products", data=[]),   # product filter, set by clicking a product bar
     dcc.Store(id="snapshot"),            # previous refresh's totals, for the live deltas
-], fluid=True, style={"fontFamily": "Segoe UI, Helvetica, Arial, sans-serif"})
+], className="page", style={"fontFamily": "Segoe UI, Helvetica, Arial, sans-serif"})
 
 
 # ------------------------------------------------------------------ callbacks
@@ -227,7 +217,8 @@ def filter_options(regions, countries, _n):
              for s in sorted(stores, key=lambda s: s["store_name"])])
 
 
-def kpi_card(key, value, live, lfl):
+def kpi_card(key, value, live):
+    """Label, value and the change since the previous refresh (DELTA LIVE)."""
     unit_kpi = key if key in bi.KPIS else None
     big = bi.fmt_kpi(unit_kpi, value) if unit_kpi else f"{value:.3f}"
     if live is None:
@@ -236,21 +227,15 @@ def kpi_card(key, value, live, lfl):
         d = live.get(key, 0.0)
         text = bi.fmt_delta(unit_kpi, d) if unit_kpi else f"{d:+.3f}"
         delta = html.Span(text, style={"color": GOOD if d >= 0 else BAD})
-    if lfl is None:
-        pct = html.Span("—", className="text-muted")
-    else:
-        pct = html.Span(bi.fmt_pct(lfl[2]), style={"color": GOOD if lfl[2] >= 0 else BAD})
-    return panel(html.Div([
-        html.Div([html.Div(CARD_LABEL[key], className="small"),
-                  html.Div(big, style={"fontSize": "1.9rem", "lineHeight": "2.4rem"})], className="text-center"),
-        html.Div([html.Div("DELTA LIVE", className="text-muted", style={"fontSize": "0.65rem"}), delta,
-                  html.Div("VS PREV. DAY", className="text-muted mt-1", style={"fontSize": "0.65rem"}), pct],
-                 className="text-end small"),
-    ], className="d-flex justify-content-between align-items-center"), height="100%")
+    return panel([
+        html.Div(CARD_LABEL[key], className="kpi-label text-muted"),
+        html.Div(big, className="kpi-value"),
+        html.Div(["Δ live ", delta], className="tiny"),
+    ], height="100%")
 
 
 def _fmt_ts(value):
-    return value.strftime("%d/%m/%Y %H:%M:%S") if hasattr(value, "strftime") else "—"
+    return value.strftime("%d/%m/%Y %H:%M") if hasattr(value, "strftime") else "—"
 
 
 @app.callback(
@@ -284,11 +269,12 @@ def refresh(_n, kpi, cumulative, dates, regions, countries, stores, store_type, 
     errors = {k: v for k, v in res.items() if isinstance(v, Exception)}
     alert = None
     if errors:
-        missing = any("TABLE_OR_VIEW_NOT_FOUND" in str(e) for e in errors.values())
-        text = ("A silver table or dimension doesn't exist yet: deploy and run the pipeline (with 03_sales.py), "
-                "then reload. " if missing else "Some queries failed; retrying at the next refresh. ")
+        missing = any("TABLE_OR_VIEW_NOT_FOUND" in str(e) or "UNRESOLVED_COLUMN" in str(e) for e in errors.values())
+        text = ("A silver table, column or dimension doesn't exist yet: deploy the pipeline (with 03_sales.py), "
+                "run it with a full refresh, then reload. " if missing
+                else "Some queries failed; retrying at the next refresh. ")
         alert = dbc.Alert(text + "; ".join(f"{k}: {str(e).splitlines()[0][:160]}" for k, e in errors.items()),
-                          color="warning", className="mt-2 mb-0 small")
+                          color="warning", className="mb-2 py-1 tiny")
         if "sales" in errors or "people" in errors or "dims" in errors:
             nothing = figures.empty("Waiting for the silver tables")
             return ([no_update] * len(CARDS) + ["", nothing, "", "", nothing, "", "", nothing,
@@ -298,15 +284,12 @@ def refresh(_n, kpi, cumulative, dates, regions, countries, stores, store_type, 
     current = bi.totals(sales_rows, people_rows)
     sig = bi.signature(f)
     live = bi.live_delta(current, snapshot, sig)
-    cards = []
-    for key in CARDS:
-        lfl = bi.like_for_like(sales_rows, people_rows, key) if key in bi.KPIS else None
-        cards.append(kpi_card(key, current[key], live, lfl))
+    cards = [kpi_card(key, current[key], live) for key in CARDS]
 
     kpi_label = bi.KPIS[kpi][0]
     trend_rows = people_rows if kpi == "PEOPLE_IN" else sales_rows
-    trend_fig = figures.trend(bi.trend_series(trend_rows, kpi, cumulative), kpi, cumulative)
-    trend_title = f"{kpi_label.upper()} BY STORE-LOCAL HOUR{' (CUMULATIVE)' if cumulative else ''}, ONE LINE PER DATE"
+    trend_fig = figures.trend(bi.trend_series(trend_rows, kpi, cumulative), kpi)
+    trend_title = f"{kpi_label.upper()}{' (CUMULATIVE)' if cumulative else ''} BY GMT HOUR, PER MACRO REGION"
 
     def chart(name, chart_kpi, labels):
         if name in errors:
@@ -323,24 +306,24 @@ def refresh(_n, kpi, cumulative, dates, regions, countries, stores, store_type, 
                               + ([f"{len(f.products)} product(s)"] if f.products else []))
 
     fresh = [] if "fresh" in errors else bi.normalize(res["fresh"])
-    date_options = [{"label": d, "value": d} for d in sorted({r["local_date"] for r in fresh if r["local_date"]})]
+    date_options = [{"label": d, "value": d} for d in sorted({r["utc_date"] for r in fresh if r["utc_date"]})]
 
     def latest(stream, field):
         values = [r[field] for r in fresh if r["stream"] == stream and r[field] is not None]
         return max(values) if values else None
 
     rows = {s: int(sum(r["row_count"] for r in fresh if r["stream"] == s)) for s in ("SALES", "PEOPLE")}
-    footer = (f"Last refresh: {datetime.now(timezone.utc):%d/%m/%Y %H:%M:%S} UTC | "
-              f"Last sale (store-local): {_fmt_ts(latest('SALES', 'last_local'))} | "
-              f"Last people event (store-local): {_fmt_ts(latest('PEOPLE', 'last_local'))} | "
-              f"Last sales ingested: {_fmt_ts(latest('SALES', 'last_ingested'))} UTC | "
+    footer = (f"All times GMT · Refreshed {datetime.now(timezone.utc):%d/%m/%Y %H:%M:%S} · "
+              f"Last sale {_fmt_ts(latest('SALES', 'last_utc'))} · "
+              f"Last people event {_fmt_ts(latest('PEOPLE', 'last_utc'))} · "
+              f"Sales ingested {_fmt_ts(latest('SALES', 'last_ingested'))} · "
               f"Silver rows: {rows['SALES']:,} sales, {rows['PEOPLE']:,} people events")
 
     return (cards + [trend_title, trend_fig,
-                     f"GEOGRAPHY · {kpi_label.upper()} BY {GEO_LEVEL_LABEL[geo_level].upper()}, PER DATE", geo_path,
-                     geo_fig,
-                     f"PRODUCT · {bi.KPIS[product_kpi][0].upper()} BY {PRODUCT_LEVEL_LABEL[product_level].upper()}, "
-                     f"PER DATE", product_path, product_fig,
+                     f"GEOGRAPHY · {kpi_label.upper()} BY {GEO_LEVEL_LABEL[geo_level].upper()}, PER GMT DATE",
+                     geo_path, geo_fig,
+                     f"PRODUCT · {bi.KPIS[product_kpi][0].upper()} BY "
+                     f"{PRODUCT_LEVEL_LABEL[product_level].upper()}, PER GMT DATE", product_path, product_fig,
                      date_options, footer, alert, {"signature": sig, "totals": current}])
 
 

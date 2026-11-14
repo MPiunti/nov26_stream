@@ -8,12 +8,12 @@ The data it reads is described in [`sales.md`](sales.md) (transactions and the s
 
 | | |
 |---|---|
-| **What it does** | Shows sales value (EUR), items sold, average price and people in, per store-local date and hour, with filters and drill-down; refreshes **every 5 seconds**, so the numbers grow while the people-stream app and the continuous pipeline run |
+| **What it does** | Shows sales value (EUR), items sold, average price and people in, on one **GMT** timeline, with filters and drill-down; refreshes **every 5 seconds**, so the numbers grow while the people-stream app and the continuous pipeline run |
 | **What it reads** | `silver_sales_transactions` and `silver_people_counter_events` (`test02_streaming`), `dim_store` and `dim_product` (`test02_warehouse`). `SELECT` only |
 | **What it doesn't do** | Write anything, read the source tables, or talk to the people-stream app or the pipeline. It works whenever the silver tables exist, also with the simulator stopped |
 | **Bundle** | `apps/sales_dashboard/`, bundle `retail_sales_dashboard_bundle`. Separate from the pipeline bundle and from the people-stream app bundle: deployed, started and destroyed on its own |
 | **App** | `sales-bi-<user>` (e.g. `sales-bi-michele-piunti`), under **Compute → Apps** |
-| **Code** | `apps/sales_dashboard/app/`: `app.py` (screen and callbacks), `bi.py` (KPIs, deltas, drill-down, chart series; standard library only), `dashboard_sql.py` (the queries; standard library only), `figures.py` (Plotly charts), `sql_warehouse.py` (SQL warehouse access) |
+| **Code** | `apps/sales_dashboard/app/`: `app.py` (screen and callbacks), `assets/dashboard.css` (compact sizes, side margins), `bi.py` (KPIs, deltas, drill-down, chart series; standard library only), `dashboard_sql.py` (the queries; standard library only), `figures.py` (Plotly charts), `sql_warehouse.py` (SQL warehouse access) |
 
 ```
  people-stream app ──▶ sources ──(continuous job)──▶ pipeline ──▶ silver_sales_transactions
@@ -26,16 +26,18 @@ The data it reads is described in [`sales.md`](sales.md) (transactions and the s
 
 ## 2. Screen
 
-One page, laid out like a classic sales BI report:
+One compact page, laid out like a classic sales BI report. **All dates and hours are GMT (UTC)**, so stores in Milan, New York and Tokyo share one timeline:
 
 | Area | Content |
 |---|---|
-| **Filter area** (left) | **KPI on charts** (Sales value, Items sold, Average price, People in); **store-local dates** (the dates found in the silver tables; none = all); **macro region** buttons; **country** and **store** lists (narrowed by the region and country chosen; flagships marked ★); **store type** (All, Flagships, Others); **merch. category** buttons; the **Live** switch; **Reset filters** |
-| **KPI cards** (top) | VALUE, QUANTITY, AVG PRICE, PEOPLE IN, ITEMS PER VISITOR, each with **DELTA LIVE** and **VS PREV. DAY** (§4) |
-| **Trend** | The chosen KPI by store-local hour (10 to 20), **one line per store-local date**: the latest date in blue, earlier ones in grey, so today's line can be compared with yesterday's as it grows. **Cumulative through the day** (on by default) adds up the hours within each date; off, each point is that hour alone |
-| **Geography** | Horizontal bars of the chosen KPI by **Area → Country → Store**, largest first (top 15, with a note of how many more). Each bar is **cumulative over the dates**: one segment per store-local date, with the total at the end of the bar |
+| **Filter area** (left) | **KPI on charts** (Sales value, Items sold, Average price, People in); **GMT dates** (the dates found in the silver tables; none = all); **macro region** buttons; **country** and **store** lists (narrowed by the region and country chosen; flagships marked ★); **store type** (All, Flagships, Others); **merch. category** buttons; the **Live** switch; **Reset filters** |
+| **KPI cards** (top) | VALUE, QUANTITY, AVG PRICE, PEOPLE IN, ITEMS PER VISITOR, each with its **Δ live** (§4). There's no comparison with a previous period |
+| **Trend** | The chosen KPI on the **GMT calendar date and hour** axis, **one line per macro region** in distinct colours (Europe blue, Americas orange, Asia green). Every line covers the same hours; an hour when a region's stores are closed counts as 0. **Cumulative** (on by default) adds up from the first hour, so the lines grow through the run; off, each point is that hour alone. For the average price, an hour without sales is a gap |
+| **Geography** | Horizontal bars of the chosen KPI by **Area → Country → Store**, largest first (top 15, with a note of how many more). Each bar is **cumulative over the dates**: one segment per GMT date (latest blue, earlier grey), with the total at the end of the bar |
 | **Product** | The same by **Merch. category → Product**. With KPI *People in*, it shows sales value instead: people aren't counted per product |
-| **Footer** | Last refresh (UTC), last sale and last people event (store-local time), last sales ingestion into bronze (UTC), and silver row counts |
+| **Footer** | Last refresh, last sale, last people event, last sales ingestion into bronze (all GMT), and silver row counts |
+
+**Compact and responsive** (`app/assets/dashboard.css`, served by Dash automatically): small fonts and controls, short charts (trend 230 px, 20 px per bar), and white space at the sides of the page: **5% of the width on phones**, 7.5% from 768 px (tablets, laptops), 10% from 1,400 px (large screens). On a phone the filter area, the cards (two per row) and the charts stack in one column; the page sets the `viewport` meta tag so it renders at device width.
 
 **Browser tab title:** fixed to "Sales BI dashboard". The app is created with `update_title=None`, so Dash doesn't show "Updating..." during the refresh callbacks, and nothing changes the title afterwards.
 
@@ -57,15 +59,14 @@ The level buttons on the left of each chart ("Select the chart fields") choose w
 
 | KPI | Definition | Filters that apply |
 |---|---|---|
-| VALUE | `SUM(amount)` of the silver transactions, EUR | All |
+| VALUE | `SUM(amount)` of the silver transactions, EUR (transaction values are always in euro, [`sales.md`](sales.md) §11) | All |
 | QUANTITY | `SUM(quantity)`: items sold | All |
 | AVG PRICE | VALUE / QUANTITY | All |
 | PEOPLE IN | `SUM(people_count)` of the silver `ENTRY` events | Dates, geography, store type; **not** category or product |
 | ITEMS PER VISITOR | QUANTITY / PEOPLE IN | As its two parts |
 
-- **Store-local time:** dates and hours are the stores' local time (`transaction_timestamp`, `event_timestamp`; `TIMESTAMP_NTZ`), as in silver. A date therefore covers different UTC hours in Milan, New York and Tokyo.
-- **DELTA LIVE:** the change since the previous refresh with the same filters, so it shows how much arrived in the last 5 seconds. It's blank (—) right after a filter change.
-- **VS PREV. DAY:** a **like-for-like** comparison: the latest store-local date against the date before, over the same hours (up to the latest hour of the latest date). Blank with a single date.
+- **GMT time:** sales use silver's `transaction_timestamp_utc` ([`sales.md`](sales.md) §11.4). People events have only their local `event_timestamp` in silver, so the queries convert it the same way: `convert_timezone(d.timezone_id, 'UTC', s.event_timestamp)`, with the store's time zone from `dim_store`. The date filter and the bar segments are GMT dates.
+- **Δ live:** the change since the previous refresh with the same filters, so it shows how much arrived in the last 5 seconds. It's blank (—) right after a filter change.
 
 ## 5. Freshness
 
@@ -77,7 +78,7 @@ The level buttons on the left of each chart ("Select the chart fields") choose w
 
 Each refresh runs five read-only queries in parallel (sales by date and hour, people by date and hour, the geography breakdown, the product breakdown, freshness), on one reused connection per worker thread. The dimensions are read once and cached.
 
-If a silver table doesn't exist yet (pipeline not deployed or not run since `03_sales.py` was added), the page shows a warning and keeps retrying at every refresh.
+If a silver table or column doesn't exist yet (pipeline not deployed, or not full-refreshed since `03_sales.py` or `transaction_timestamp_utc` was added), the page shows a warning and keeps retrying at every refresh.
 
 ## 6. Queries
 
@@ -85,7 +86,8 @@ All in `app/dashboard_sql.py`:
 
 - **Read-only:** every statement is a `SELECT`.
 - **Parameterized:** filter values are passed as named parameters (`:region_0`, `:date_0`, …), never pasted into the SQL. Dates must be `YYYY-MM-DD`, levels and store types come from fixed lists, and table names are checked to be `catalog.schema.table`.
-- **Joins:** silver is joined to `dim_store` on the natural key `store_id`, for the region, country and flagship filters. Store, country and product names come from the cached dimensions.
+- **Joins:** silver is joined to `dim_store` on the natural key `store_id`, for the region, country and flagship filters, the macro region of each trend line, and the people events' time zone. Store, country and product names come from the cached dimensions.
+- **Session time zone UTC:** the connection sets `TIMEZONE` = `UTC`, so `TIMESTAMP` columns (`ingestion_timestamp`) come back in GMT too.
 
 ## 7. Deployment and permissions
 
