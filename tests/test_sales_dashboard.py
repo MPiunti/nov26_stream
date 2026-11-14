@@ -256,7 +256,6 @@ class AppTests(unittest.TestCase):
         self.assertIn('APP_TITLE = "Sales BI dashboard"', code)
         self.assertIn("title=APP_TITLE, update_title=None", code)
         self.assertNotIn("document.title", code)
-        self.assertNotIn("clientside_callback", code)
 
     def test_no_previous_day_comparison(self):
         code = read_text(*APP, "app", "app.py") + read_text(*APP, "app", "bi.py")
@@ -269,10 +268,46 @@ class AppTests(unittest.TestCase):
         self.assertIn(".page { padding: 8px 5vw 12px 5vw; }", css)
         self.assertIn("@media (min-width: 768px)  { .page { padding-left: 7.5vw; padding-right: 7.5vw; } }", css)
         self.assertIn("@media (min-width: 1400px) { .page { padding-left: 10vw; padding-right: 10vw; } }", css)
+        self.assertIn(".filters .form-check:not(.form-switch) { padding-left: 0;", css,
+                      "the compact buttons rule must not remove the switch's padding (the switch would stick out)")
+        self.assertIn(".filters .form-switch { display: flex; justify-content: center;", css, "Live switch centred")
         code = read_text(*APP, "app", "app.py")
         self.assertIn('className="page"', code)
         self.assertIn('"name": "viewport"', code, "phones render at device width")
         self.assertIn("xs=12", code, "columns stack on phones")
+
+    def test_one_refresh_at_a_time(self):
+        """A refresh slower than the interval must not be overtaken (Dash would drop its result: a frozen screen)."""
+        code = read_text(*APP, "app", "app.py")
+        gate = code.split("# One refresh at a time.", 1)[1].split("app.clientside_callback(", 1)[1].split("\n)\n", 1)[0]
+        self.assertIn("if (tick && done !== tick && Date.now() - tick < {STUCK_MS})", gate)
+        self.assertIn('Output("tick", "data"),\n    Input("refresh", "n_intervals")', gate)
+        self.assertIn("STUCK_MS = 30000", code)
+        refresh = code.split("def refresh(", 1)[0].rsplit("@app.callback(", 1)[1]
+        self.assertIn('Input("tick", "data")', refresh, "the refresh follows the gate, not the interval")
+        self.assertNotIn('Input("refresh", "n_intervals")', refresh)
+        self.assertIn('Output("done", "data")', refresh)
+        body = code.split("def refresh(", 1)[1].split("\nif __name__", 1)[0]
+        self.assertEqual(body.count(", tick])"), 2, "every return reports its tick as done")
+        self.assertIn("PARALLEL_QUERIES = 5", read_text(*APP, "app", "sql_warehouse.py"))
+
+    def test_footer_shows_live_freshness_in_gmt(self):
+        """Refresh, last sale, last people event: GMT times, a status dot and an age ticked every second."""
+        code = read_text(*APP, "app", "app.py")
+        self.assertIn('FRESH_CHIPS = (("refresh", "Refreshed"), ("sales", "Last sale"), ("people", "Last people event"))',
+                      code)
+        self.assertIn('dcc.Interval(id="clock", interval=1000)', code)
+        self.assertIn("FRESH_OK_S, FRESH_WARN_S = 30, 120", code)
+        ages = code.split("FRESH_OK_S, FRESH_WARN_S = 30, 120", 1)[1].split("\n)\n", 1)[0]
+        self.assertIn('Input("clock", "n_intervals"), Input("fresh-ms", "data")', ages)
+        self.assertIn("Date.now() - ms", ages, "ages are computed in the browser, between refreshes too")
+        self.assertIn('f"{now:%H:%M:%S} GMT"', code)
+        self.assertIn('"sales": _epoch_ms(latest("SALES", "last_ingested"))', code)
+        self.assertIn('"people": _epoch_ms(latest("PEOPLE", "last_ingested"))', code)
+        self.assertNotIn('Output("footer", "children")', code)
+        css = read_text(*APP, "app", "assets", "dashboard.css")
+        for cls in (".dot-ok", ".dot-warn", ".dot-stale", ".chip"):
+            self.assertIn(cls, css)
 
     def test_refreshes_every_few_seconds(self):
         code = read_text(*APP, "app", "app.py")

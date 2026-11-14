@@ -7,7 +7,7 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-PARALLEL_QUERIES = 4
+PARALLEL_QUERIES = 5  # one per refresh query, so a refresh is one round of queries, not two
 
 
 class Warehouse:

@@ -128,6 +128,21 @@ def breakdown_panel(prefix, levels, value):
     ], height="100%")
 
 
+FRESH_CHIPS = (("refresh", "Refreshed"), ("sales", "Last sale"), ("people", "Last people event"))
+
+
+def footer():
+    """Freshness chips, all GMT: a status dot, the time, and how long ago (ticked every second in the browser)."""
+    chips = [html.Span([
+        html.Span(id=f"dot-{key}", className="dot dot-off"),
+        html.Span(text, className="text-muted me-1"),
+        html.Span("—", id=f"ts-{key}", className="fw-semibold"),
+        html.Span(id=f"age-{key}", className="age ms-1"),
+    ], className="chip") for key, text in FRESH_CHIPS]
+    return html.Div(chips + [html.Span(id="foot-rows", className="chip text-muted")],
+                    className="footer d-flex flex-wrap justify-content-end align-items-center gap-1 tiny")
+
+
 app.layout = html.Div([
     dbc.Row([
         dbc.Col(sidebar(), xs=12, md=3, xl=2, className="mb-2"),
@@ -146,10 +161,14 @@ app.layout = html.Div([
                 dbc.Col(breakdown_panel("geo", GEO_LEVEL_LABEL, "REGION"), xs=12, lg=6, className="mb-2"),
                 dbc.Col(breakdown_panel("product", PRODUCT_LEVEL_LABEL, "CATEGORY"), xs=12, lg=6, className="mb-2"),
             ], className="g-2"),
-            html.Div(id="footer", className="tiny text-end text-uppercase text-muted"),
+            footer(),
         ], xs=12, md=9, xl=10),
     ], className="g-2"),
     dcc.Interval(id="refresh", interval=REFRESH_SECONDS * 1000),
+    dcc.Interval(id="clock", interval=1000),  # ticks the footer ages in the browser; no server call
+    dcc.Store(id="fresh-ms"),            # epoch ms of the last refresh and of the last sales / people ingestion
+    dcc.Store(id="tick"),                # time a refresh was requested (ms), see gate_refresh
+    dcc.Store(id="done"),                # the tick of the last refresh that finished
     dcc.Store(id="products", data=[]),   # product filter, set by clicking a product bar
     dcc.Store(id="snapshot"),            # previous refresh's totals, for the live deltas
 ], className="page", style={"fontFamily": "Segoe UI, Helvetica, Arial, sans-serif"})
@@ -166,6 +185,44 @@ def make_filters(dates, regions, countries, stores, store_type, categories, prod
 @app.callback(Output("refresh", "disabled"), Input("live", "value"))
 def toggle_live(live):
     return not live
+
+
+# Footer ages: recomputed in the browser every second from the epoch times of the last refresh, so they keep
+# counting between refreshes (and show when data stops arriving). Green < FRESH_OK_S, amber < FRESH_WARN_S, red after.
+FRESH_OK_S, FRESH_WARN_S = 30, 120
+app.clientside_callback(
+    f"""function(n, f) {{
+        const out = [];
+        for (const key of ["refresh", "sales", "people"]) {{
+            const ms = f && f[key];
+            if (!ms) {{ out.push("", "dot dot-off"); continue; }}
+            const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+            const age = s < 60 ? s + " s ago" : s < 3600 ? Math.floor(s / 60) + " min ago"
+                                              : Math.floor(s / 3600) + " h ago";
+            out.push(age, s < {FRESH_OK_S} ? "dot dot-ok" : s < {FRESH_WARN_S} ? "dot dot-warn" : "dot dot-stale");
+        }}
+        return out;
+    }}""",
+    [o for key, _ in FRESH_CHIPS for o in (Output(f"age-{key}", "children"), Output(f"dot-{key}", "className"))],
+    Input("clock", "n_intervals"), Input("fresh-ms", "data"),
+)
+
+
+# One refresh at a time. If the interval fired the refresh directly, a refresh slower than REFRESH_SECONDS would
+# be overtaken by the next one, and Dash drops the result of an overtaken callback: the screen would freeze.
+# So the interval only asks for a refresh when the previous one is done (or after STUCK_MS, in case one failed).
+STUCK_MS = 30000
+app.clientside_callback(
+    f"""function(n, tick, done) {{
+        if (tick && done !== tick && Date.now() - tick < {STUCK_MS}) {{
+            return window.dash_clientside.no_update;
+        }}
+        return Date.now();
+    }}""",
+    Output("tick", "data"),
+    Input("refresh", "n_intervals"),
+    State("tick", "data"), State("done", "data"),
+)
 
 
 @app.callback(
@@ -234,8 +291,17 @@ def kpi_card(key, value, live):
     ], height="100%")
 
 
-def _fmt_ts(value):
-    return value.strftime("%d/%m/%Y %H:%M") if hasattr(value, "strftime") else "—"
+def _fmt_ts(value, fmt="%d/%m/%Y %H:%M"):
+    return value.strftime(fmt) if hasattr(value, "strftime") else "—"
+
+
+def _epoch_ms(value):
+    """A TIMESTAMP from the warehouse (session time zone UTC) as epoch milliseconds, for the browser's ages."""
+    if not hasattr(value, "timestamp"):
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return int(value.timestamp() * 1000)
 
 
 @app.callback(
@@ -243,14 +309,17 @@ def _fmt_ts(value):
     Output("trend-title", "children"), Output("trend", "figure"),
     Output("geo-title", "children"), Output("geo-path", "children"), Output("geo-chart", "figure"),
     Output("product-title", "children"), Output("product-path", "children"), Output("product-chart", "figure"),
-    Output("dates", "options"), Output("footer", "children"), Output("alert", "children"), Output("snapshot", "data"),
-    Input("refresh", "n_intervals"), Input("kpi", "value"), Input("cumulative", "value"),
+    Output("dates", "options"), Output("ts-refresh", "children"), Output("ts-sales", "children"),
+    Output("ts-people", "children"), Output("foot-rows", "children"), Output("fresh-ms", "data"),
+    Output("alert", "children"), Output("snapshot", "data"),
+    Output("done", "data"),
+    Input("tick", "data"), Input("kpi", "value"), Input("cumulative", "value"),
     Input("dates", "value"), Input("regions", "value"), Input("countries", "value"), Input("stores", "value"),
     Input("store-type", "value"), Input("categories", "value"), Input("products", "data"),
     Input("geo-level", "value"), Input("product-level", "value"),
     State("snapshot", "data"),
 )
-def refresh(_n, kpi, cumulative, dates, regions, countries, stores, store_type, categories, products,
+def refresh(tick, kpi, cumulative, dates, regions, countries, stores, store_type, categories, products,
             geo_level, product_level, snapshot):
     f = make_filters(dates, regions, countries, stores, store_type, categories, products)
     product_kpi = kpi if kpi in bi.SALES_KPIS else "VALUE"  # people aren't counted per product
@@ -278,7 +347,7 @@ def refresh(_n, kpi, cumulative, dates, regions, countries, stores, store_type, 
         if "sales" in errors or "people" in errors or "dims" in errors:
             nothing = figures.empty("Waiting for the silver tables")
             return ([no_update] * len(CARDS) + ["", nothing, "", "", nothing, "", "", nothing,
-                                                no_update, no_update, alert, snapshot])
+                                                no_update] + [no_update] * 5 + [alert, snapshot, tick])
 
     sales_rows, people_rows = bi.normalize(res["sales"]), bi.normalize(res["people"])
     current = bi.totals(sales_rows, people_rows)
@@ -313,18 +382,21 @@ def refresh(_n, kpi, cumulative, dates, regions, countries, stores, store_type, 
         return max(values) if values else None
 
     rows = {s: int(sum(r["row_count"] for r in fresh if r["stream"] == s)) for s in ("SALES", "PEOPLE")}
-    footer = (f"All times GMT · Refreshed {datetime.now(timezone.utc):%d/%m/%Y %H:%M:%S} · "
-              f"Last sale {_fmt_ts(latest('SALES', 'last_utc'))} · "
-              f"Last people event {_fmt_ts(latest('PEOPLE', 'last_utc'))} · "
-              f"Sales ingested {_fmt_ts(latest('SALES', 'last_ingested'))} · "
-              f"Silver rows: {rows['SALES']:,} sales, {rows['PEOPLE']:,} people events")
+    now = datetime.now(timezone.utc)
+    foot = [f"{now:%H:%M:%S} GMT"]
+    for stream in ("SALES", "PEOPLE"):
+        sim, ingested = latest(stream, "last_utc"), latest(stream, "last_ingested")
+        foot.append(f"{_fmt_ts(sim, '%d %b %H:%M')} GMT · ingested {_fmt_ts(ingested, '%H:%M:%S')}" if sim else "—")
+    foot.append(f"Silver: {rows['SALES']:,} sales · {rows['PEOPLE']:,} people events")
+    fresh_ms = {"refresh": _epoch_ms(now), "sales": _epoch_ms(latest("SALES", "last_ingested")),
+                "people": _epoch_ms(latest("PEOPLE", "last_ingested"))}
 
     return (cards + [trend_title, trend_fig,
                      f"GEOGRAPHY · {kpi_label.upper()} BY {GEO_LEVEL_LABEL[geo_level].upper()}, PER GMT DATE",
                      geo_path, geo_fig,
                      f"PRODUCT · {bi.KPIS[product_kpi][0].upper()} BY "
                      f"{PRODUCT_LEVEL_LABEL[product_level].upper()}, PER GMT DATE", product_path, product_fig,
-                     date_options, footer, alert, {"signature": sig, "totals": current}])
+                     date_options] + foot + [fresh_ms, alert, {"signature": sig, "totals": current}, tick])
 
 
 if __name__ == "__main__":

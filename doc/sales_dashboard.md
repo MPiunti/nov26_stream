@@ -35,7 +35,7 @@ One compact page, laid out like a classic sales BI report. **All dates and hours
 | **Trend** | The chosen KPI on the **GMT calendar date and hour** axis, **one line per macro region** in distinct colours (Europe blue, Americas orange, Asia green). Every line covers the same hours; an hour when a region's stores are closed counts as 0. **Cumulative** (on by default) adds up from the first hour, so the lines grow through the run; off, each point is that hour alone. For the average price, an hour without sales is a gap |
 | **Geography** | Horizontal bars of the chosen KPI by **Area → Country → Store**, largest first (top 15, with a note of how many more). Each bar is **cumulative over the dates**: one segment per GMT date (latest blue, earlier grey), with the total at the end of the bar |
 | **Product** | The same by **Merch. category → Product**. With KPI *People in*, it shows sales value instead: people aren't counted per product |
-| **Footer** | Last refresh, last sale, last people event, last sales ingestion into bronze (all GMT), and silver row counts |
+| **Footer** | Live freshness chips, all in GMT (§5): **Refreshed** (time of the last refresh), **Last sale** and **Last people event** (the latest simulated time in silver, and when it was ingested), each with a status dot and an age that ticks every second; then the silver row counts |
 
 **Compact and responsive** (`app/assets/dashboard.css`, served by Dash automatically): small fonts and controls, short charts (trend 230 px, 20 px per bar), and white space at the sides of the page: **5% of the width on phones**, 7.5% from 768 px (tablets, laptops), 10% from 1,400 px (large screens). On a phone the filter area, the cards (two per row) and the charts stack in one column; the page sets the `viewport` meta tag so it renders at device width.
 
@@ -76,7 +76,21 @@ The level buttons on the left of each chart ("Select the chart fields") choose w
 | Source → silver | The continuous job runs one pipeline update after another; each picks up what's new (`readme.md`, "Running the pipeline") |
 | Silver → screen | The dashboard queries silver **every 5 seconds** (`REFRESH_SECONDS` in `app/app.yaml`, at least 2). The **Live** switch stops and restarts the refresh |
 
-Each refresh runs five read-only queries in parallel (sales by date and hour, people by date and hour, the geography breakdown, the product breakdown, freshness), on one reused connection per worker thread. The dimensions are read once and cached.
+Each refresh runs five read-only queries in parallel, all five at once (sales by region, GMT date and hour; people likewise; the geography breakdown; the product breakdown; freshness), on one reused connection per worker thread. Measured on the Serverless Starter Warehouse: about 1.6–1.9 s per query, 3–4 s per refresh. The dimensions are read once and cached.
+
+**Footer freshness:** each chip shows a time in GMT and how long ago it was, recomputed in the browser every second, so the ages keep counting between refreshes and show at once when data stops arriving:
+
+| Chip | Time shown | Age counts from | Dot |
+|---|---|---|---|
+| Refreshed | When the page last got data, e.g. `19:32:05 GMT` | That moment | Green under 30 s, amber under 2 min, red after |
+| Last sale | The latest `transaction_timestamp_utc` in silver (simulated, up to two days ahead), and when it was ingested into bronze | The ingestion (real time) | Same |
+| Last people event | The latest people event in GMT, and when it was ingested | The ingestion | Same |
+
+While the simulator and the continuous job run, all three dots stay green: a new batch reaches silver every few seconds. An amber or red sales or people dot with a green refresh dot means the page is fine but no new data is arriving (simulator stopped, or job paused).
+
+**One refresh at a time:** the 5-second interval doesn't run the refresh directly; it only asks for one when the previous refresh has finished (or after 30 s, in case one failed). Otherwise a refresh slower than 5 s, which happens when the warehouse is also busy with the simulator's writes, would be overtaken by the next one, and Dash drops the result of an overtaken callback: the screen would never update. So the screen updates every 5 s, or as soon as the previous refresh ends if that takes longer.
+
+**One simulator run at a time in silver:** if the pipeline isn't full-refreshed after an app START (`readme.md`, "Running the pipeline", step 3), silver keeps the previous run too. Each START restarts the simulated clock from the current time, so the two runs cover the same GMT hours: the totals add both runs, and the trend's timeline ends at the previous run's last simulated hour (up to two days ahead). The new sales then land inside hours already drawn, and the trend looks frozen while the cards and bars still grow. Full-refresh the pipeline after every START.
 
 If a silver table or column doesn't exist yet (pipeline not deployed, or not full-refreshed since `03_sales.py` or `transaction_timestamp_utc` was added), the page shows a warning and keeps retrying at every refresh.
 

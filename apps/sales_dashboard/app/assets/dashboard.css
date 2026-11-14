@@ -13,8 +13,25 @@ body { background: #fff; font-size: 12px; }
 .filters .Select-placeholder, .filters .Select-value { line-height: 26px !important; }
 .filters .Select-multi-value-wrapper { font-size: 11px; }
 .filters .btn, .level .btn { font-size: 11px; padding: 2px 8px; }
-.filters .form-check { padding-left: 0; margin-right: 2px; }
+.filters .form-check:not(.form-switch) { padding-left: 0; margin-right: 2px; }
+
+/* The Live switch: centred in the filter area. Bootstrap pulls the switch into the form-check's left padding
+   with a negative margin; with flexbox neither is needed. */
+.filters .form-switch { display: flex; justify-content: center; align-items: center; gap: 6px; padding-left: 0; }
+.filters .form-switch .form-check-input { float: none; margin: 0; }
+.filters .form-switch .form-check-label { margin: 0; }
 .level .form-check { display: inline-block; padding-left: 0; margin: 0 4px 4px 0; }
 .kpi-value { font-size: 1.25rem; line-height: 1.6rem; font-weight: 500; }
 .kpi-label, .tiny { font-size: 10px; letter-spacing: 0.02em; }
 .panel-title { font-size: 11px; font-weight: 600; }
+
+/* Footer freshness chips: status dot (green < 30 s, amber < 2 min, red after), GMT time, live age. */
+.footer { margin-top: 4px; }
+.chip { background: #f2f2f2; border-radius: 10px; padding: 2px 8px; white-space: nowrap; }
+.age { color: #666; }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+.dot-ok { background: #4a9d4a; animation: pulse 2s ease-in-out infinite; }
+.dot-warn { background: #e0a800; }
+.dot-stale { background: #d9534f; }
+.dot-off { background: #bbb; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
