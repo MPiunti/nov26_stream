@@ -17,6 +17,7 @@ import figures
 import sql_warehouse
 
 REFRESH_SECONDS = max(2, int(os.environ.get("REFRESH_SECONDS", "5")))
+CLOCK_MS = 250  # the footer clock ticks 4 times a second: the seconds and the refresh bar move smoothly
 REGIONS = ("EUROPE", "AMERICAS", "ASIA")
 CATEGORIES = ("SHOES", "BAGS", "READY_TO_WEAR", "ACCESSORIES", "TRAVEL", "SUNGLASSES")
 CATEGORY_LABEL = {"SHOES": "Shoes", "BAGS": "Bags", "READY_TO_WEAR": "Ready-to-wear", "ACCESSORIES": "Accessories",
@@ -132,14 +133,20 @@ FRESH_CHIPS = (("refresh", "Refreshed"), ("sales", "Last sale"), ("people", "Las
 
 
 def footer():
-    """Freshness chips, all GMT: a status dot, the time, and how long ago (ticked every second in the browser)."""
+    """All GMT. A live clock; freshness chips (status dot, time, age, all ticked in the browser), the Refreshed
+    chip with a bar filling up to the next refresh; then the running simulation and its counts in silver."""
+    now = html.Span([html.Span("Now", className="text-muted me-1"),
+                     html.Span("—", id="now-gmt", className="fw-semibold mono")], className="chip")
     chips = [html.Span([
         html.Span(id=f"dot-{key}", className="dot dot-off"),
         html.Span(text, className="text-muted me-1"),
         html.Span("—", id=f"ts-{key}", className="fw-semibold"),
         html.Span(id=f"age-{key}", className="age ms-1"),
-    ], className="chip") for key, text in FRESH_CHIPS]
-    return html.Div(chips + [html.Span(id="foot-rows", className="chip text-muted")],
+    ] + ([html.Span(html.Span(id="refresh-fill", className="refresh-fill"), className="refresh-bar")]
+         if key == "refresh" else []), className="chip") for key, text in FRESH_CHIPS]
+    simulation = html.Span([html.Span("Simulation", className="text-muted me-1"),
+                            html.Span("—", id="foot-simulation", className="fw-semibold mono")], className="chip")
+    return html.Div([now] + chips + [simulation, html.Span(id="foot-rows", className="chip text-muted")],
                     className="footer d-flex flex-wrap justify-content-end align-items-center gap-1 tiny")
 
 
@@ -181,7 +188,7 @@ app.layout = html.Div([
         ], xs=12, md=9, xl=10),
     ], className="g-2"),
     dcc.Interval(id="refresh", interval=REFRESH_SECONDS * 1000),
-    dcc.Interval(id="clock", interval=1000),  # ticks the footer ages in the browser; no server call
+    dcc.Interval(id="clock", interval=CLOCK_MS),  # ticks the footer in the browser; no server call
     dcc.Store(id="fresh-ms"),            # epoch ms of the last refresh and of the last sales / people ingestion
     dcc.Store(id="tick"),                # time a refresh was requested (ms), see gate_refresh
     dcc.Store(id="done"),                # the tick of the last refresh that finished
@@ -208,7 +215,11 @@ def toggle_live(live):
 FRESH_OK_S, FRESH_WARN_S = 30, 120
 app.clientside_callback(
     f"""function(n, f) {{
-        const out = [];
+        const now = new Date();
+        const out = [now.toISOString().substring(11, 19) + " GMT"];
+        const since = f && f.refresh ? Date.now() - f.refresh : null;
+        const share = since === null ? 0 : Math.min(1, since / ({REFRESH_SECONDS} * 1000));
+        out.push({{"width": (share * 100).toFixed(1) + "%"}});
         for (const key of ["refresh", "sales", "people"]) {{
             const ms = f && f[key];
             if (!ms) {{ out.push("", "dot dot-off"); continue; }}
@@ -219,7 +230,8 @@ app.clientside_callback(
         }}
         return out;
     }}""",
-    [o for key, _ in FRESH_CHIPS for o in (Output(f"age-{key}", "children"), Output(f"dot-{key}", "className"))],
+    [Output("now-gmt", "children"), Output("refresh-fill", "style")]
+    + [o for key, _ in FRESH_CHIPS for o in (Output(f"age-{key}", "children"), Output(f"dot-{key}", "className"))],
     Input("clock", "n_intervals"), Input("fresh-ms", "data"),
 )
 
@@ -331,7 +343,8 @@ def _epoch_ms(value):
     Output("product-title", "children"), Output("product-path", "children"), Output("product-chart", "figure"),
     Output("channel-title", "children"), Output("channel-path", "children"), Output("channel-chart", "figure"),
     Output("dates", "options"), Output("ts-refresh", "children"), Output("ts-sales", "children"),
-    Output("ts-people", "children"), Output("foot-rows", "children"), Output("fresh-ms", "data"),
+    Output("ts-people", "children"), Output("foot-simulation", "children"), Output("foot-rows", "children"),
+    Output("fresh-ms", "data"),
     Output("alert", "children"), Output("snapshot", "data"),
     Output("done", "data"),
     Input("tick", "data"), Input("kpi", "value"), Input("cumulative", "value"),
@@ -370,7 +383,7 @@ def refresh(tick, kpi, cumulative, dates, regions, countries, stores, channels, 
         if "sales" in errors or "people" in errors or "dims" in errors:
             nothing = figures.empty("Waiting for the silver tables")
             return ([no_update] * len(CARDS) + ["", nothing, "", "", nothing, "", "", nothing, "", "", nothing,
-                                                no_update] + [no_update] * 5 + [alert, snapshot, tick])
+                                                no_update] + [no_update] * 6 + [alert, snapshot, tick])
 
     sales_rows, people_rows = bi.normalize(res["sales"]), bi.normalize(res["people"])
     current = bi.totals(sales_rows, people_rows)
@@ -407,12 +420,16 @@ def refresh(tick, kpi, cumulative, dates, regions, countries, stores, channels, 
         return max(values) if values else None
 
     rows = {s: int(sum(r["row_count"] for r in fresh if r["stream"] == s)) for s in ("SALES", "PEOPLE")}
+    transactions = int(sum(r.get("transactions") or 0 for r in fresh if r["stream"] == "SALES"))
+    simulation_id = max((r["simulation_id"] for r in fresh if r.get("simulation_id")), default=None)
     now = datetime.now(timezone.utc)
     foot = [f"{now:%H:%M:%S} GMT"]
     for stream in ("SALES", "PEOPLE"):
         sim, ingested = latest(stream, "last_utc"), latest(stream, "last_ingested")
         foot.append(f"{_fmt_ts(sim, '%d %b %H:%M')} GMT · ingested {_fmt_ts(ingested, '%H:%M:%S')}" if sim else "—")
-    foot.append(f"Silver: {rows['SALES']:,} sales · {rows['PEOPLE']:,} people events")
+    foot.append(simulation_id or "—")
+    foot.append(f"In silver for this simulation: {transactions:,} sales transactions ({rows['SALES']:,} items) · "
+                f"{rows['PEOPLE']:,} people events")
     fresh_ms = {"refresh": _epoch_ms(now), "sales": _epoch_ms(latest("SALES", "last_ingested")),
                 "people": _epoch_ms(latest("PEOPLE", "last_ingested"))}
 

@@ -151,15 +151,17 @@ GROUP BY 1, 2"""
 
 
 def freshness_sql():
-    """Latest rows of both silver tables, unfiltered: the footer and the GMT dates on offer."""
+    """The current simulation in silver, unfiltered: its id, row counts and latest rows, for the footer, and
+    the GMT dates on offer. Sales rows are lines (items); transactions are distinct transaction ids."""
     sales, people, store = table("SALES_TABLE"), table("PEOPLE_TABLE"), table("STORE_TABLE")
     sql = f"""SELECT 'SALES' AS stream, CAST({SALES_UTC} AS DATE) AS utc_date,
-  COUNT(*) AS row_count, MAX(s.ingestion_timestamp) AS last_ingested, MAX({SALES_UTC}) AS last_utc
+  COUNT(*) AS row_count, COUNT(DISTINCT s.transaction_id) AS transactions,
+  MAX(s.ingestion_timestamp) AS last_ingested, MAX({SALES_UTC}) AS last_utc, MAX(s.simulation_id) AS simulation_id
 FROM {sales} s
 GROUP BY 1, 2
 UNION ALL
 SELECT 'PEOPLE', CAST({PEOPLE_UTC} AS DATE),
-  COUNT(*), MAX(s.ingestion_timestamp), MAX({PEOPLE_UTC})
+  COUNT(*), CAST(NULL AS BIGINT), MAX(s.ingestion_timestamp), MAX({PEOPLE_UTC}), MAX(s.simulation_id)
 FROM {people} s
 JOIN {store} d ON s.store_id = d.store_id
 GROUP BY 1, 2"""

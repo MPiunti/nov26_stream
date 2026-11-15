@@ -38,7 +38,7 @@ One compact page, laid out like a classic sales BI report. **All dates and hours
 | **Channel** | Next to the trend: horizontal bars of the chosen KPI by **sales channel**, Retail, Flagship and E-commerce (`dataset.md` §2.6), one segment per GMT date. With KPI *People in*, E-commerce has no bar: it has no people counting |
 | **Geography** | Horizontal bars of the chosen KPI by **Area → Country → Store**, largest first (top 15, with a note of how many more). Each bar is **cumulative over the dates**: one segment per GMT date (latest blue, earlier grey), with the total at the end of the bar |
 | **Product** | The same by **Merch. category → Product**. With KPI *People in*, it shows sales value instead: people aren't counted per product |
-| **Footer** | Live freshness chips, all in GMT (§5): **Refreshed** (time of the last refresh), **Last sale** and **Last people event** (the latest simulated time in silver, and when it was ingested), each with a status dot and an age that ticks every second; then the silver row counts |
+| **Footer** | All in GMT (§5): a live clock (**Now**); freshness chips **Refreshed** (with a bar filling up to the next refresh), **Last sale** and **Last people event** (the latest simulated time in silver, and when it was ingested), each with a status dot and an age; then the running **Simulation** id and its counts in silver: sales transactions, items and people events |
 
 **Compact and responsive** (`app/assets/dashboard.css`, served by Dash automatically): small fonts and controls, short charts (trend 230 px, 20 px per bar), and white space at the sides of the page: **5% of the width on phones**, 7.5% from 768 px (tablets, laptops), 10% from 1,400 px (large screens). On a phone the filter area, the cards (two per row) and the charts stack in one column; the page sets the `viewport` meta tag so it renders at device width.
 
@@ -82,13 +82,15 @@ The level buttons on the left of each chart ("Select the chart fields") choose w
 
 Each refresh runs six read-only queries in parallel, all six at once (sales by region, GMT date and hour; people likewise; the geography, product and channel breakdowns; freshness), on one reused connection per worker thread. Measured on the Serverless Starter Warehouse: about 1.6–1.9 s per query, 3–4 s per refresh. The dimensions are read once and cached.
 
-**Footer freshness:** each chip shows a time in GMT and how long ago it was, recomputed in the browser every second, so the ages keep counting between refreshes and show at once when data stops arriving:
+**Footer freshness:** a **Now** clock shows the current GMT time, and each chip shows a time in GMT and how long ago it was. All of it is recomputed in the browser four times a second, with no server call, so time visibly passes between refreshes and the ages show at once when data stops arriving. Under **Refreshed**, a thin bar fills from the last refresh to the next one (5 seconds) and starts again at every refresh; a bar that stays full means a refresh is late:
 
 | Chip | Time shown | Age counts from | Dot |
 |---|---|---|---|
 | Refreshed | When the page last got data, e.g. `19:32:05 GMT` | That moment | Green under 30 s, amber under 2 min, red after |
 | Last sale | The latest `transaction_timestamp_utc` in silver (simulated, up to two days ahead), and when it was ingested into bronze | The ingestion (real time) | Same |
 | Last people event | The latest people event in GMT, and when it was ingested | The ingestion | Same |
+
+At the end of the footer, **Simulation** names the simulation the page shows (the latest `simulation_id`, the one the views select, `warehouse.md` §6), followed by its counts in silver: sales transactions (distinct `transaction_id`), their items (one row each) and people events. They restart from zero when a new simulation starts.
 
 While the simulator and the continuous job run, all three dots stay green: a new batch reaches silver every few seconds. An amber or red sales or people dot with a green refresh dot means the page is fine but no new data is arriving (simulator stopped, or job paused).
 

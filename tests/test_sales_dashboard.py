@@ -329,7 +329,18 @@ class AppTests(unittest.TestCase):
         code = read_text(*APP, "app", "app.py")
         self.assertIn('FRESH_CHIPS = (("refresh", "Refreshed"), ("sales", "Last sale"), ("people", "Last people event"))',
                       code)
-        self.assertIn('dcc.Interval(id="clock", interval=1000)', code)
+        self.assertIn('dcc.Interval(id="clock", interval=CLOCK_MS)', code)
+        self.assertIn("CLOCK_MS = 250", code)
+        for component_id in ("now-gmt", "refresh-fill", "foot-simulation", "foot-rows"):
+            self.assertIn(f'id="{component_id}"', code)
+        self.assertIn('Output("now-gmt", "children"), Output("refresh-fill", "style")', code)
+        self.assertIn("toISOString().substring(11, 19)", code, "a live GMT clock, ticked in the browser")
+        self.assertIn('Output("foot-simulation", "children")', code)
+        self.assertIn('"In silver for this simulation: {transactions:,} sales transactions', code)
+        fresh = q.freshness_sql()[0]
+        for column in ("MAX(s.simulation_id) AS simulation_id", "COUNT(DISTINCT s.transaction_id) AS transactions"):
+            self.assertIn(column, fresh)
+        self.assertIn(".refresh-fill", read_text(*APP, "app", "assets", "dashboard.css"))
         self.assertIn("FRESH_OK_S, FRESH_WARN_S = 30, 120", code)
         ages = code.split("FRESH_OK_S, FRESH_WARN_S = 30, 120", 1)[1].split("\n)\n", 1)[0]
         self.assertIn('Input("clock", "n_intervals"), Input("fresh-ms", "data")', ages)
@@ -341,6 +352,26 @@ class AppTests(unittest.TestCase):
         css = read_text(*APP, "app", "assets", "dashboard.css")
         for cls in (".dot-ok", ".dot-warn", ".dot-stale", ".chip"):
             self.assertIn(cls, css)
+
+    def test_module_constants_are_defined_before_the_layout_uses_them(self):
+        """app.py builds the layout when imported: a constant defined further down breaks the app's start."""
+        tree = parse(*APP, "app", "app.py")
+        defined, layout_line = {}, None
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        defined.setdefault(target.id, node.lineno)
+                    if isinstance(target, ast.Attribute) and target.attr == "layout":
+                        layout_line = node.lineno
+        self.assertIsNotNone(layout_line)
+        used = set()
+        for node in tree.body:  # names read at import time: module-level statements up to the layout, and
+            if node.lineno <= layout_line:  # the functions the layout calls
+                used |= {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and n.id.isupper()}
+        for name in used:
+            if name in defined:
+                self.assertLess(defined[name], layout_line, f"{name} is defined after app.layout")
 
     def test_refreshes_every_few_seconds(self):
         code = read_text(*APP, "app", "app.py")
