@@ -39,7 +39,7 @@ The same six categories, in this order, are the PURCHASE_PROB categories of the 
 
 ## 4. How sales use products
 
-For each purchase in a category, the sales simulator picks one active product of that category at random, uniformly, and sells one unit at its `list_price` (`sales.md` §4). Prices are the same in every country and region.
+For each purchase in a category, the sales simulator picks one active product of that category at random, uniformly, and sells one unit at its `list_price` (`sales.md` §4). Prices are the same in every country and region. Online, in the e-commerce stores, the same products sell at 90% of `list_price` (`ecommerce.price_pct`, `sales.md` §12).
 
 ## 5. Loading and changing it
 

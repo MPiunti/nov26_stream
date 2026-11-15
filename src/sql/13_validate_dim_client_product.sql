@@ -2,13 +2,14 @@
 -- ============================================================
 -- 13 - Validate client and product dimensions
 -- Targets: workspace.test02_warehouse.dim_client, dim_product
--- Expected: 100,000 clients (500 per store of each country),
+-- Expected: 100,000 clients (500 per physical store of each country),
 --           120 products (20 per category). Every row must PASS.
 -- ============================================================
 
 WITH expected_clients AS (
     SELECT country_code, COUNT(*) * 500 AS expected_count
     FROM workspace.test02_warehouse.dim_store
+    WHERE channel <> 'ECOM'
     GROUP BY country_code
 ),
 

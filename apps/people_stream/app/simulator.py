@@ -58,10 +58,28 @@ class Store:
     store_id: str
     macro_region: str
     timezone_id: str
+    channel: str = "RETAIL"  # dim_store.channel: RETAIL, FLAGSHIP (both with people counting) or ECOM
+
+    @property
+    def counts_people(self):
+        """Physical stores have a people counter; e-commerce stores only sell."""
+        return self.channel != sales.ECOM
 
     @property
     def sensor_id(self):
         return f"PC-{self.store_id.split('-')[1]}-01"
+
+
+def store_traffic(stores):
+    """{country: physical stores, each flagship counted FLAGSHIP_TRAFFIC times}.
+
+    Times N_AVG_PEOPLE it's the country's visitors per day: what the e-commerce sales are sized on.
+    """
+    traffic = {}
+    for s in stores:
+        country = s.store_id[:2]
+        traffic[country] = traffic.get(country, 0.0) + (FLAGSHIP_TRAFFIC if s.store_id in FLAGSHIP_IDS else 1.0)
+    return traffic
 
 
 def stay_window(avg_minutes):
@@ -409,6 +427,9 @@ class Simulation:
         self.n_avg = dict(N_AVG_DEFAULTS)
         self.purchase_prob = {r: dict(PURCHASE_PROB_DEFAULTS[r]) for r in REGIONS}
         self.avg_stay = AVG_STAY_DEFAULT
+        # Cockpit: whether sales are produced at all and, with them, the e-commerce sales. Read at every batch.
+        self.sales_enabled = CONFIG.cockpit_sales
+        self.ecommerce_enabled = CONFIG.cockpit_ecommerce
         self._reset_status()
 
     def _reset_status(self):
@@ -423,7 +444,9 @@ class Simulation:
                        # Cumulative people_count of ENTRY and of EXIT events per region, one point per batch.
                        "history": [],
                        # Sales so far: per region, transactions, amount (EUR) and transactions per category.
-                       "sales": {r: {"transactions": 0, "amount": 0.0, "local": 0,
+                       # transactions are baskets (one per buyer), items are their lines.
+                       "sales": {r: {"transactions": 0, "items": 0, "amount": 0.0, "local": 0,
+                                     "ecom_transactions": 0, "ecom_items": 0, "ecom_amount": 0.0,
                                      "by_category": {c: 0 for c in CATEGORIES}} for r in REGIONS},
                        "sales_rows_written": 0, "sources_cleared": False,
                        # Batches generated but not yet written to the warehouse.
@@ -457,6 +480,11 @@ class Simulation:
         self._thread = threading.Thread(target=self._run, name="people-stream", daemon=True)
         self._thread.start()
 
+    def set_cockpit(self, sales_on, ecommerce_on):
+        """The cockpit switches; they apply from the next batch, also while running."""
+        with self._lock:
+            self.sales_enabled, self.ecommerce_enabled = bool(sales_on), bool(ecommerce_on)
+
     def stop(self, wait=True):
         """End the run. The generator stops at once; batches already generated are still written."""
         self._stop.set()
@@ -474,14 +502,19 @@ class Simulation:
                 self._clear_sources()  # every run starts from empty source tables
                 with self._lock:
                     self.status["sources_cleared"] = True
-            stores = self._load_stores()
+            all_stores = self._load_stores()
+            stores = [s for s in all_stores if s.counts_people]        # people stream: physical stores only
+            ecom_stores = [s for s in all_stores if not s.counts_people]  # sales only
             generator = Generator(stores, self._load_offsets())
             seller = None
             if self._load_catalog is not None:
-                seller = sales.SalesGenerator(self._load_catalog(), {s.store_id: s.store_id[:2] for s in stores},
+                seller = sales.SalesGenerator(self._load_catalog(), {s.store_id: s.store_id[:2] for s in all_stores},
                                               self._load_sales_offsets(), run_id=generator.run_id,
                                               local_share=CONFIG.local_share, flagship_ids=FLAGSHIP_IDS,
-                                              flagship_local_share=CONFIG.flagship_local_share)
+                                              flagship_local_share=CONFIG.flagship_local_share,
+                                              ecom_stores=ecom_stores, store_traffic=store_traffic(stores),
+                                              ecom_share=CONFIG.ecom_share, ecom_price_pct=CONFIG.ecom_price_pct,
+                                              store_zones={s.store_id: s.timezone_id for s in all_stores})
             start_real, start_utc = self._clock(), self._now()
             end_utc = start_utc + timedelta(hours=MAX_RUN_SIM_HOURS)
             with self._lock:
@@ -509,8 +542,11 @@ class Simulation:
                     n_avg = dict(self.n_avg)
                     prob = {r: dict(self.purchase_prob[r]) for r in REGIONS}
                     avg_stay = self.avg_stay
+                    sales_on, ecommerce_on = self.sales_enabled, self.ecommerce_enabled
                 rows = generator.tick(sim_from, sim_to, n_avg, avg_stay)
-                sale_rows = seller.sales_for(rows, prob) if seller else []
+                sale_rows = []
+                if seller and sales_on:  # the cockpit: sales, and e-commerce on top of them, can be switched off
+                    sale_rows = seller.batch(rows, sim_from, sim_to, n_avg, prob, ecommerce=ecommerce_on)
                 with self._lock:
                     st = self.status
                     if rows or sale_rows:
@@ -531,10 +567,17 @@ class Simulation:
                     for row in sale_rows:
                         tx = json.loads(row["raw_event"])
                         region_sales = st["sales"][REGIONS[row["source_partition"]]]
-                        region_sales["transactions"] += 1
+                        first_line = tx["line_number"] == 1  # one transaction per basket, one item per line
+                        if tx["exit_event_id"] is None:  # e-commerce: counted apart from the stores' sales
+                            region_sales["ecom_transactions"] += first_line
+                            region_sales["ecom_items"] += 1
+                            region_sales["ecom_amount"] = round(region_sales["ecom_amount"] + tx["amount"], 2)
+                            continue
+                        region_sales["transactions"] += first_line
+                        region_sales["items"] += 1
                         region_sales["amount"] = round(region_sales["amount"] + tx["amount"], 2)
                         region_sales["by_category"][tx["category"]] += 1
-                        region_sales["local"] += tx["client_id"][3:5] == tx["store_id"][:2]
+                        region_sales["local"] += first_line and tx["client_id"][3:5] == tx["store_id"][:2]
                     st["remaining_seconds"] = max(0.0, MAX_RUN_REAL_SECONDS - elapsed)
                     st["history"].append({"sim_utc": sim_to, "entries": dict(st["entries"]),
                                          "exits": dict(st["exits"])})
@@ -582,4 +625,6 @@ class Simulation:
     def snapshot(self):
         with self._lock:
             return json.loads(json.dumps({**self.status, "n_avg": dict(self.n_avg), "avg_stay": self.avg_stay,
+                                          "sales_enabled": self.sales_enabled,
+                                          "ecommerce_enabled": self.ecommerce_enabled,
                                           "purchase_prob": self.purchase_prob}, default=str))

@@ -3,8 +3,10 @@
 -- 09 - Populate client dimension
 -- Target: workspace.test02_warehouse.dim_client
 --
--- 500 registered clients per store of each country, so 100,000
--- distinct clients for the 200 stores (IT 20,000 ... SE 1,500).
+-- 500 registered clients per physical store of each country, so
+-- 100,000 distinct clients for the 200 stores (IT 20,000 ... SE 1,500).
+-- The e-commerce stores (channel ECOM) add no clients: online buyers
+-- are clients of the country (doc/client.md).
 -- client_id = CL-<country_code>-<7-digit number>.
 -- Needs dim_store with macro_region (run 01 and 02 first).
 --
@@ -21,6 +23,7 @@ USING (
             macro_region,
             COUNT(*) * 500 AS client_count
         FROM workspace.test02_warehouse.dim_store
+        WHERE channel <> 'ECOM'
         GROUP BY country_code, macro_region
     )
 

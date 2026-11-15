@@ -2,7 +2,8 @@
 -- ============================================================
 -- 03 - Validate Silver store dimension
 -- Target: workspace.test02_warehouse.dim_store
--- Expected records: 200
+-- Expected records: 213 (200 physical stores, 13 e-commerce stores)
+-- Country and macro region counts are of the physical stores.
 -- ============================================================
 
 WITH expected_country AS (
@@ -29,6 +30,7 @@ actual_country AS (
         country_code,
         COUNT(*) AS actual_count
     FROM workspace.test02_warehouse.dim_store
+    WHERE channel <> 'ECOM'
     GROUP BY country_code
 ),
 
@@ -46,6 +48,7 @@ actual_macro_region AS (
         macro_region,
         COUNT(*) AS actual_count
     FROM workspace.test02_warehouse.dim_store
+    WHERE channel <> 'ECOM'
     GROUP BY macro_region
 ),
 
@@ -77,9 +80,49 @@ checks AS (
 
     SELECT
         'TOTAL_STORES' AS validation,
-        200 AS expected_value,
+        213 AS expected_value,
         COUNT(*) AS actual_value
     FROM workspace.test02_warehouse.dim_store
+
+    UNION ALL
+
+    -- Stores per sales channel
+    SELECT
+        CONCAT('CHANNEL_', e.channel),
+        e.expected_count,
+        (SELECT COUNT(*) FROM workspace.test02_warehouse.dim_store s WHERE s.channel = e.channel)
+    FROM VALUES
+        ('RETAIL', 198),
+        ('FLAGSHIP', 2),
+        ('ECOM', 13)
+    AS e(channel, expected_count)
+
+    UNION ALL
+
+    -- Channel missing, unknown, or not matching the flagship flag and the store id
+    SELECT
+        'INVALID_CHANNEL',
+        0,
+        COUNT(*)
+    FROM workspace.test02_warehouse.dim_store
+    WHERE channel IS NULL
+       OR channel NOT IN ('RETAIL', 'FLAGSHIP', 'ECOM')
+       OR (channel = 'FLAGSHIP') <> is_flagship
+       OR (channel = 'ECOM') <> (store_id LIKE '%-EC-001')
+
+    UNION ALL
+
+    -- Exactly one e-commerce store in every country that has stores
+    SELECT
+        'COUNTRIES_WITHOUT_ONE_ECOM_STORE',
+        0,
+        COUNT(*)
+    FROM (
+        SELECT country_code
+        FROM workspace.test02_warehouse.dim_store
+        GROUP BY country_code
+        HAVING COUNT_IF(channel = 'ECOM') <> 1
+    ) countries
 
     UNION ALL
 

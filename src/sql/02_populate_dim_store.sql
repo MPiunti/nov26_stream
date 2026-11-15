@@ -2,7 +2,7 @@
 -- ============================================================
 -- 02 - Populate the store dimension
 -- Target: workspace.test02_warehouse.dim_store
--- Expected records: 200
+-- Expected records: 213 (200 physical stores and 13 e-commerce stores)
 --
 -- Distribution:
 --   Italy             40   EUROPE
@@ -12,15 +12,18 @@
 --   Japan             13   ASIA
 --   South Korea       13   ASIA
 --
--- Macro regions: EUROPE 100, AMERICAS 60, ASIA 40.
--- Flagships (is_flagship = TRUE, own names):
+-- Macro regions (physical stores): EUROPE 100, AMERICAS 60, ASIA 40.
+-- Flagships (is_flagship = TRUE, channel FLAGSHIP, own names):
 --   IT-MI-001  Milan Galleria Vittorio Emanuele
 --   US-NY-001  New York Fifth Avenue
+-- Channels: FLAGSHIP 2, RETAIL 198 (the other physical stores),
+--   ECOM 13: one e-commerce store per country, <country>-EC-001,
+--   sales only, no people counting.
 -- Full rules: doc/dataset.md, "Store dimension".
 --
 -- Idempotent execution: MERGE by natural store_id. New stores are
--- inserted; existing stores get store_name, macro_region and
--- is_flagship filled or corrected.
+-- inserted; existing stores get store_name, macro_region,
+-- is_flagship and channel filled or corrected.
 -- ============================================================
 
 MERGE INTO workspace.test02_warehouse.dim_store AS target
@@ -101,12 +104,6 @@ USING (
             city,
             region,
 
-            CASE
-                WHEN country_code IN ('IT', 'FR', 'DE', 'ES', 'NL', 'BE', 'AT', 'PT', 'SE') THEN 'EUROPE'
-                WHEN country_code IN ('US') THEN 'AMERICAS'
-                WHEN country_code IN ('CN', 'JP', 'KR') THEN 'ASIA'
-            END AS macro_region,
-
             CONCAT(country_code, '-', city_code, '-', LPAD(CAST(shop_number AS STRING), 3, '0'))
                 IN ('IT-MI-001', 'US-NY-001') AS is_flagship,
 
@@ -117,9 +114,58 @@ USING (
         LATERAL VIEW EXPLODE(
             SEQUENCE(1, store_count)
         ) generated AS shop_number
+    ),
+
+    -- One e-commerce store per country: channel ECOM. It sells online only: no sensor, no people
+    -- counting. Its time zone (the country's main one) gives the local time of its sales.
+    ecom_stores AS (
+        SELECT
+            CONCAT(country_code, '-EC-001') AS store_id,
+            CONCAT('E-commerce ', country_name) AS store_name,
+            country_code,
+            country_name,
+            'Online' AS city,
+            CAST(NULL AS STRING) AS region,
+            FALSE AS is_flagship,
+            timezone_id
+        FROM VALUES
+            ('IT', 'Italy', 'Europe/Rome'),
+            ('FR', 'France', 'Europe/Paris'),
+            ('DE', 'Germany', 'Europe/Berlin'),
+            ('ES', 'Spain', 'Europe/Madrid'),
+            ('NL', 'Netherlands', 'Europe/Amsterdam'),
+            ('BE', 'Belgium', 'Europe/Brussels'),
+            ('AT', 'Austria', 'Europe/Vienna'),
+            ('PT', 'Portugal', 'Europe/Lisbon'),
+            ('SE', 'Sweden', 'Europe/Stockholm'),
+            ('US', 'United States', 'America/New_York'),
+            ('CN', 'China', 'Asia/Shanghai'),
+            ('JP', 'Japan', 'Asia/Tokyo'),
+            ('KR', 'South Korea', 'Asia/Seoul')
+        AS e (country_code, country_name, timezone_id)
     )
 
-    SELECT * FROM generated_stores
+    SELECT
+        s.*,
+
+        CASE
+            WHEN country_code IN ('IT', 'FR', 'DE', 'ES', 'NL', 'BE', 'AT', 'PT', 'SE') THEN 'EUROPE'
+            WHEN country_code IN ('US') THEN 'AMERICAS'
+            WHEN country_code IN ('CN', 'JP', 'KR') THEN 'ASIA'
+        END AS macro_region,
+
+        -- Sales channel: ECOM for the e-commerce stores, FLAGSHIP for the flagships, RETAIL otherwise.
+        CASE
+            WHEN store_id LIKE '%-EC-001' THEN 'ECOM'
+            WHEN is_flagship THEN 'FLAGSHIP'
+            ELSE 'RETAIL'
+        END AS channel
+
+    FROM (
+        SELECT * FROM generated_stores
+        UNION ALL
+        SELECT * FROM ecom_stores
+    ) s
 
 ) AS source
 
@@ -129,10 +175,12 @@ WHEN MATCHED AND NOT (
     target.macro_region <=> source.macro_region
     AND target.store_name <=> source.store_name
     AND target.is_flagship <=> source.is_flagship
+    AND target.channel <=> source.channel
 ) THEN UPDATE SET
     target.store_name = source.store_name,
     target.macro_region = source.macro_region,
     target.is_flagship = source.is_flagship,
+    target.channel = source.channel,
     target.updated_at = CURRENT_TIMESTAMP()
 
 WHEN NOT MATCHED THEN INSERT (
@@ -144,6 +192,7 @@ WHEN NOT MATCHED THEN INSERT (
     region,
     macro_region,
     is_flagship,
+    channel,
     timezone_id,
     is_active,
     created_at,
@@ -158,6 +207,7 @@ VALUES (
     source.region,
     source.macro_region,
     source.is_flagship,
+    source.channel,
     source.timezone_id,
     TRUE,
     CURRENT_TIMESTAMP(),

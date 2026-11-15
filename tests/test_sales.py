@@ -9,7 +9,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
 from helpers import read_text
-from test_people_stream import APP, SKIP_REASON, _FastClock, _run, _stores, sim
+from test_people_stream import APP, HALF_HOUR, MACRO, SKIP_REASON, _FastClock, _run, _stores, sim
 
 if sim is not None:
     import sales
@@ -186,6 +186,101 @@ class SalesGeneratorTests(unittest.TestCase):
         for row in rows:
             self.assertEqual(_sales_rejections(row["raw_event"], stores, clients, products), [], row["raw_event"])
 
+    def _ecom_run(self, days=2, seed=7):
+        """People stream and every sale, store and e-commerce, of `days` simulated days for all stores."""
+        from test_dataset import _ecom_stores
+        stores = _stores()
+        ecom = [sim.Store(f"{c}-EC-001", MACRO[c], tz, "ECOM") for c, _, tz in _ecom_stores()]
+        countries = {s.store_id: s.store_id[:2] for s in stores + ecom}
+        seller = sales.SalesGenerator(_catalog(), countries, run_id="ecom1234", seed=seed,
+                                      ecom_stores=ecom, store_traffic=sim.store_traffic(stores),
+                                      ecom_share=sim.CONFIG.ecom_share, ecom_price_pct=sim.CONFIG.ecom_price_pct)
+        gen = sim.Generator(stores, run_id="ecom1234", seed=seed)
+        n_avg = {r: 3000 for r in sim.REGIONS}
+        people, store_sales, ecom_sales = [], [], []
+        t = datetime(2026, 11, 13, tzinfo=timezone.utc)
+        for _ in range(int(days * 48)):
+            rows = gen.tick(t, t + HALF_HOUR, n_avg)
+            people += rows
+            store_sales += seller.sales_for(rows, _probs())
+            ecom_sales += seller.ecom_sales(t, t + HALF_HOUR, n_avg, _probs())
+            t += HALF_HOUR
+        return people, store_sales, ecom_sales
+
+    def test_ecom_is_10_percent_of_sales_value_15_in_us_and_china(self):
+        _, store_sales, ecom_sales = self._ecom_run()
+        value = defaultdict(lambda: [0.0, 0.0])  # country: [stores, ecom]
+        for i, rows in ((0, store_sales), (1, ecom_sales)):
+            for row in rows:
+                tx = json.loads(row["raw_event"])
+                value[tx["store_id"][:2]][i] += tx["amount"]
+        share = {c: e / (s + e) * 100 for c, (s, e) in value.items()}
+        high = [c for c in share if c in ("US", "CN")]
+        for country, pct in share.items():
+            target = 15 if country in high else 10
+            self.assertAlmostEqual(pct, target, delta=2.5, msg=f"{country}: {pct:.1f}%")
+        group = lambda cs: sum(value[c][1] for c in cs) / sum(sum(value[c]) for c in cs) * 100
+        self.assertAlmostEqual(group(high), 15, delta=1)
+        self.assertAlmostEqual(group([c for c in share if c not in high]), 10, delta=1)
+
+    def test_ecom_transactions_are_10_percent_cheaper_and_online(self):
+        people, store_sales, ecom_sales = self._ecom_run(days=1)
+        products = {p.product_id: p for p in _products()}
+        avg = lambda rows: sum(json.loads(r["raw_event"])["amount"] for r in rows) / len(rows)
+        self.assertAlmostEqual(avg(ecom_sales) / avg(store_sales), 0.90, delta=0.03)
+        exit_ids = {json.loads(r["raw_event"])["event_id"] for r in people}
+        clients = dict(_clients())
+        for row in ecom_sales:
+            tx = json.loads(row["raw_event"])
+            self.assertTrue(tx["store_id"].endswith("-EC-001"))
+            self.assertIsNone(tx["exit_event_id"], "online: no visit, no EXIT event")
+            self.assertEqual(tx["unit_price"], round(products[tx["product_id"]].list_price * 0.9, 2))
+            self.assertEqual(tx["amount"], tx["unit_price"])
+            self.assertEqual(clients[tx["client_id"]], tx["store_id"][:2], "a client of the store's country")
+        self.assertFalse(any(json.loads(r["raw_event"])["store_id"].endswith("-EC-001") for r in people),
+                         "e-commerce stores never produce people events")
+        self.assertTrue(all(json.loads(r["raw_event"])["exit_event_id"] in exit_ids for r in store_sales))
+
+    def test_ecom_sales_follow_the_online_day_curve(self):
+        """More online orders in the local evening than at night; some at every hour (24-hour shop)."""
+        from zoneinfo import ZoneInfo
+        _, _, ecom_sales = self._ecom_run(days=2)
+        by_hour = Counter()
+        for row in ecom_sales:
+            tx = json.loads(row["raw_event"])
+            if tx["store_id"] == "IT-EC-001":
+                by_hour[int(tx["transaction_timestamp"][11:13])] += 1
+        self.assertGreater(by_hour[20] + by_hour[21], 4 * (by_hour[3] + by_hour[4]))
+        self.assertAlmostEqual(sum(sales.ECOM_HOURLY) / 24, 1.0)
+        self.assertEqual(len(sales.ECOM_HOURLY), 24)
+
+    def test_ecom_sales_pass_the_silver_sales_rules(self):
+        from test_dataset import _ecom_stores
+        from test_project_consistency import _sales_rejections
+        stores = {s.store_id for s in _stores()} | {f"{c}-EC-001" for c, *_ in _ecom_stores()}
+        clients = {c for c, _ in _clients()}
+        products = {p.product_id: p.category for p in _products()}
+        _, _, ecom_sales = self._ecom_run(days=0.5)
+        self.assertTrue(ecom_sales)
+        for row in ecom_sales:
+            self.assertEqual(_sales_rejections(row["raw_event"], stores, clients, products), [], row["raw_event"])
+
+    def test_ecom_factor(self):
+        """ECOM value = share of the total, so share / (100 - share) of the stores' value, at 90% prices."""
+        self.assertAlmostEqual(sales.ecom_factor(10, 100), 1 / 9)
+        self.assertAlmostEqual(sales.ecom_factor(15, 90), 15 / 85 / 0.9)
+        self.assertEqual((sim.CONFIG.ecom_share("US"), sim.CONFIG.ecom_share("CN"), sim.CONFIG.ecom_share("IT")),
+                         (15, 15, 10))
+        self.assertEqual(sim.CONFIG.ecom_price_pct, 90)
+
+    def test_only_physical_stores_count_people(self):
+        self.assertFalse(sim.Store("IT-EC-001", "EUROPE", "Europe/Rome", "ECOM").counts_people)
+        self.assertTrue(sim.Store("IT-MI-001", "EUROPE", "Europe/Rome", "FLAGSHIP").counts_people)
+        code = read_text(*APP, "app", "simulator.py")
+        self.assertIn("stores = [s for s in all_stores if s.counts_people]", code)
+        self.assertIn("generator = Generator(stores, self._load_offsets())", code)
+        self.assertIn("SELECT store_id, macro_region, timezone_id, channel FROM", read_text(*APP, "app", "sql_warehouse.py"))
+
     def test_70_percent_local_clients_and_inverse_at_flagships(self):
         gen = sales.SalesGenerator(_catalog(), _store_country(), run_id="mix12345", seed=5,
                                    local_share=sim.CONFIG.local_share, flagship_ids=sim.FLAGSHIP_IDS,
@@ -209,15 +304,76 @@ class SalesGeneratorTests(unittest.TestCase):
 
     def test_ids_and_offsets(self):
         rows = self._sales(_probs(), offsets={0: 50, 1: 1, 2: 9})
-        ids = [json.loads(r["raw_event"])["transaction_id"] for r in rows]
-        self.assertEqual(len(ids), len(set(ids)))
+        txs = [json.loads(r["raw_event"]) for r in rows]
+        keys = [(t["transaction_id"], t["line_number"]) for t in txs]
+        self.assertEqual(len(keys), len(set(keys)), "(transaction_id, line_number) is unique")
+        ids = list(dict.fromkeys(t["transaction_id"] for t in txs))
+        self.assertEqual(ids, [f"TX-sale1234-{n:010d}" for n in range(1, len(ids) + 1)], "consecutive, in order")
         by_partition = defaultdict(list)
-        for row, tx_id in zip(rows, ids):
-            self.assertEqual(tx_id, f"tx-sale1234-{row['source_partition']}-{row['source_offset']:010d}")
+        for row in rows:
             by_partition[row["source_partition"]].append(row["source_offset"])
         for p, first in {0: 50, 1: 1, 2: 9}.items():
             self.assertEqual(by_partition[p], list(range(first, first + len(by_partition[p]))))
         self.assertEqual(sales.PARTITION, sim.PARTITION)
+
+    def test_one_transaction_per_buyer_with_one_line_per_item(self):
+        """Everything one buyer buys in a visit is one transaction: same id, store, client, exit and time."""
+        rows = self._sales(_probs(20), seed=3)  # 20% per category: many baskets with several items
+        baskets = defaultdict(list)
+        for row in rows:
+            tx = json.loads(row["raw_event"])
+            baskets[tx["transaction_id"]].append(tx)
+        multi = 0
+        for tx_id, lines in baskets.items():
+            self.assertEqual([t["line_number"] for t in lines], list(range(1, len(lines) + 1)), tx_id)
+            self.assertTrue(all(t["line_count"] == len(lines) for t in lines))
+            for field in ("store_id", "client_id", "exit_event_id", "transaction_timestamp", "simulation_id"):
+                self.assertEqual(len({t[field] for t in lines}), 1, f"{tx_id}: {field}")
+            categories = [t["category"] for t in lines]
+            self.assertEqual(len(categories), len(set(categories)), "at most one item per category")
+            self.assertEqual(categories, [c for c in sim.CATEGORIES if c in categories], "lines in category order")
+            multi += len(lines) > 1
+        self.assertGreater(multi, len(baskets) / 4, "with 20% per category many baskets hold several items")
+
+    def test_items_per_basket(self):
+        """Items stay as PURCHASE_PROB says; the baskets hold about 1.08 items with the default probabilities."""
+        probs = sim.PURCHASE_PROB_DEFAULTS["EUROPE"]
+        self.assertAlmostEqual(sales.items_per_basket(probs), 0.20 / (1 - 0.95 * 0.98 * 0.94 * 0.97 * 0.98 * 0.98))
+        self.assertAlmostEqual(sales.items_per_basket(probs), 1.083, places=3)
+        self.assertEqual(sales.items_per_basket({c: 0 for c in sim.CATEGORIES}), 0.0)
+        rows = self._sales(_probs())
+        transactions = len({json.loads(r["raw_event"])["transaction_id"] for r in rows})
+        self.assertAlmostEqual(len(rows) / transactions, 1.083, delta=0.02)
+        self.assertIn("≈ 1.08 items", read_text("doc", "sales.md"))
+
+    def test_transaction_ids_grow_with_purchase_time_across_channels(self):
+        """Sorting the ids sorts the transactions by their GMT time, stores and e-commerce together, over batches."""
+        from zoneinfo import ZoneInfo
+        from test_dataset import _ecom_stores
+        stores = _stores()
+        ecom = [sim.Store(f"{c}-EC-001", MACRO[c], tz, "ECOM") for c, _, tz in _ecom_stores()]
+        seller = sales.SalesGenerator(_catalog(), {s.store_id: s.store_id[:2] for s in stores + ecom},
+                                      run_id="20261115T101648660", seed=2, ecom_stores=ecom,
+                                      store_traffic=sim.store_traffic(stores), ecom_share=sim.CONFIG.ecom_share,
+                                      ecom_price_pct=90, store_zones={s.store_id: s.timezone_id for s in stores + ecom})
+        gen = sim.Generator(stores, run_id="20261115T101648660", seed=2)
+        n_avg = {r: 3000 for r in sim.REGIONS}
+        rows, t = [], datetime(2026, 11, 13, 6, tzinfo=timezone.utc)
+        for _ in range(12):  # six hours, twelve batches
+            rows += seller.batch(gen.tick(t, t + HALF_HOUR, n_avg), t, t + HALF_HOUR, n_avg, _probs())
+            t += HALF_HOUR
+        zones = {s.store_id: ZoneInfo(s.timezone_id) for s in stores + ecom}
+        first = {}
+        for row in rows:
+            tx = json.loads(row["raw_event"])
+            local = datetime.fromisoformat(tx["transaction_timestamp"]).replace(tzinfo=zones[tx["store_id"]])
+            first.setdefault(tx["transaction_id"], local.astimezone(timezone.utc))
+        ids = list(first)
+        self.assertEqual(ids, sorted(ids), "ids come out in increasing order")
+        times = [first[i] for i in ids]
+        self.assertEqual(times, sorted(times), "a higher id is never an earlier purchase")
+        self.assertTrue(any("-EC-" in r["raw_event"] for r in rows) and any("-EC-" not in r["raw_event"] for r in rows))
+        self.assertTrue(all(i.startswith("TX-20261115T101648660-") for i in ids), "ids carry the simulation")
 
     def test_missing_dimension_data_is_reported(self):
         with self.assertRaises(ValueError):
@@ -254,10 +410,49 @@ class SimulationWithSalesTests(unittest.TestCase):
         exit_ids = {json.loads(r["raw_event"])["event_id"] for r in people
                     if json.loads(r["raw_event"])["event_type"] == "EXIT"}
         self.assertTrue({json.loads(r["raw_event"])["exit_event_id"] for r in sold} <= exit_ids)
-        self.assertEqual(sum(snap["sales"][r]["transactions"] for r in sim.REGIONS), len(sold))
+        transactions = {json.loads(r["raw_event"])["transaction_id"] for r in sold}
+        self.assertEqual(sum(snap["sales"][r]["transactions"] for r in sim.REGIONS), len(transactions))
+        self.assertEqual(sum(snap["sales"][r]["items"] for r in sim.REGIONS), len(sold))
         self.assertEqual(snap["sales_rows_written"], len(sold))
         amount = sum(json.loads(r["raw_event"])["amount"] for r in sold)
         self.assertAlmostEqual(sum(snap["sales"][r]["amount"] for r in sim.REGIONS), amount, places=2)
+
+    def _cockpit_run(self, sales_on, ecommerce_on):
+        from test_dataset import _ecom_stores
+        sold = []
+        stores = _stores()[:20] + [sim.Store("IT-EC-001", "EUROPE", "Europe/Rome", "ECOM")]
+        s = sim.Simulation(lambda: stores, lambda: {}, lambda rows: None, tick_seconds=0.001, clock=_FastClock(7),
+                           now=lambda: datetime(2026, 11, 13, 6, 0, tzinfo=timezone.utc),
+                           load_catalog=_catalog, load_sales_offsets=lambda: {}, write_sales=sold.extend)
+        s.set_cockpit(sales_on, ecommerce_on)
+        s.start()
+        s._thread.join(timeout=60)
+        self.assertEqual(s.snapshot()["state"], "FINISHED")
+        return [json.loads(r["raw_event"]) for r in sold], s.snapshot()
+
+    def test_cockpit_switches_sales_and_ecommerce(self):
+        both, snap = self._cockpit_run(True, True)
+        self.assertTrue(any(t["store_id"] == "IT-EC-001" for t in both) and any(t["exit_event_id"] for t in both))
+        self.assertEqual((snap["sales_enabled"], snap["ecommerce_enabled"]), (True, True))
+        stores_only, _ = self._cockpit_run(True, False)
+        self.assertTrue(stores_only)
+        self.assertFalse(any(t["store_id"] == "IT-EC-001" for t in stores_only), "e-commerce off")
+        nothing, snap = self._cockpit_run(False, True)
+        self.assertEqual(nothing, [], "sales off: no sales at all, e-commerce included")
+        self.assertEqual(snap["sales"]["EUROPE"]["transactions"], 0)
+
+    def test_cockpit_defaults_and_screen(self):
+        self.assertEqual((sim.CONFIG.cockpit_sales, sim.CONFIG.cockpit_ecommerce), (True, True))
+        fresh = sim.Simulation(lambda: [], lambda: {}, lambda rows: None)
+        self.assertEqual((fresh.sales_enabled, fresh.ecommerce_enabled), (True, True))
+        app = read_text(*APP, "app", "app.py")
+        for text in ('dbc.Switch(id="cockpit-sales"', 'dbc.Switch(id="cockpit-ecommerce"',
+                     'Output("cockpit-ecommerce", "disabled"), Input("cockpit-sales", "value")',
+                     "simulation.set_cockpit(sales_on, ecommerce_on)", "return not sales_on", "cockpit(snapshot),"):
+            self.assertIn(text, app)
+        layout = app.split("def serve_layout():", 1)[1]
+        self.assertLess(layout.index('id="stop"'), layout.index("cockpit(snapshot)"), "just below START/STOP")
+        self.assertLess(layout.index("cockpit(snapshot)"), layout.index("dbc.Tabs("))
 
     def test_every_start_first_empties_the_sources(self):
         log = []
@@ -343,7 +538,7 @@ class SalesAppAndDocTests(unittest.TestCase):
 
     def test_sales_doc_matches_the_code(self):
         doc = read_text("doc", "sales.md")
-        for text in ("`retail-sales-app`", "tx-<simulation id>-<partition>-<offset, 10 digits>", "chunks of at most 10,000",
+        for text in ("`retail-sales-app`", "`TX-<simulation id>-<sequence, 10 digits>`", "chunks of at most 10,000",
                      "`store_id` → `dim_store`, `client_id` → `dim_client`, `product_id` → `dim_product`"):
             self.assertIn(text, doc)
         if sim is not None:

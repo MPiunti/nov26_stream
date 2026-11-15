@@ -21,7 +21,7 @@ TOP_MEMBERS = 15  # bars per breakdown chart
 
 GEO_PATH = ("REGION", "COUNTRY", "STORE")
 PRODUCT_PATH = ("CATEGORY", "PRODUCT")
-MEASURES = ("value", "quantity", "transactions", "people_in", "people_out", "row_count")
+MEASURES = ("value", "quantity", "transactions", "store_quantity", "people_in", "people_out", "row_count")
 
 
 # ------------------------------------------------------------------ rows
@@ -68,8 +68,10 @@ def _add(acc, row):
 # ------------------------------------------------------------------ KPI cards
 
 def totals(sales_rows, people_rows):
-    """Headline numbers. ITEMS_PER_VISITOR = items sold / people in (the category filter applies only to items)."""
-    t = {"value": 0.0, "quantity": 0.0, "transactions": 0.0, "people_in": 0.0, "people_out": 0.0}
+    """Headline numbers. ITEMS_PER_VISITOR = items sold in physical stores / people in: e-commerce sales have
+    no visitors, so they are left out of it (the category filter applies only to the items)."""
+    t = {"value": 0.0, "quantity": 0.0, "transactions": 0.0, "store_quantity": 0.0, "people_in": 0.0,
+         "people_out": 0.0}
     for r in list(sales_rows) + list(people_rows):
         _add(t, r)
     return {
@@ -79,7 +81,7 @@ def totals(sales_rows, people_rows):
         "PEOPLE_IN": t["people_in"],
         "TRANSACTIONS": t["transactions"],
         "PEOPLE_OUT": t["people_out"],
-        "ITEMS_PER_VISITOR": t["quantity"] / t["people_in"] if t["people_in"] else 0.0,
+        "ITEMS_PER_VISITOR": t["store_quantity"] / t["people_in"] if t["people_in"] else 0.0,
     }
 
 
@@ -94,7 +96,7 @@ def live_delta(current, snapshot, signature):
 def signature(filters):
     """A stable, JSON-friendly key of the filters, to tell whether two refreshes are comparable."""
     return [list(filters.dates), list(filters.regions), list(filters.countries), list(filters.stores),
-            list(filters.categories), list(filters.products), filters.store_type]
+            list(filters.categories), list(filters.products), list(filters.channels)]
 
 
 # ------------------------------------------------------------------ trend
@@ -184,6 +186,8 @@ def drill_down(filters, levels, dimension, member):
             levels["PRODUCT"] = "PRODUCT"
         else:
             filters = replace(filters, products=_toggle(filters.products, member))
+    elif dimension == "CHANNEL":  # one level: a click adds or removes the channel in the filter
+        filters = replace(filters, channels=_toggle(filters.channels, member))
     else:
         raise ValueError(f"unknown dimension {dimension!r}")
     return filters, levels
@@ -204,6 +208,8 @@ def drill_up(filters, levels, dimension):
         if levels["PRODUCT"] == "PRODUCT":
             filters = replace(filters, products=(), categories=())
             levels["PRODUCT"] = "CATEGORY"
+    elif dimension == "CHANNEL":
+        filters = replace(filters, channels=())
     else:
         raise ValueError(f"unknown dimension {dimension!r}")
     return filters, levels

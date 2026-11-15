@@ -39,6 +39,9 @@ def _sales_rejections(raw_event, store_ids, client_ids, product_categories):
     reasons = []
     if not (t.get("transaction_id") or "").strip():
         reasons.append("MISSING_TRANSACTION_ID")
+    line, lines = t.get("line_number"), t.get("line_count")
+    if not isinstance(line, int) or not isinstance(lines, int) or line < 1 or line > lines:
+        reasons.append("INVALID_LINE_NUMBER")
     try:
         datetime.fromisoformat(t.get("transaction_timestamp") or "")
     except ValueError:
@@ -197,7 +200,8 @@ class PipelineCodeTests(unittest.TestCase):
         for dim, key in (("dim_store", "store_id"), ("dim_client", "client_id"), ("dim_product", "product_id")):
             self.assertIn(f"FOREIGN KEY ({key})\n        REFERENCES {catalog}.{warehouse}.{dim}({key})",
                           read_text(SALES_FILE))
-        self.assertIn("PRIMARY KEY (transaction_id)", read_text(SALES_FILE))
+        self.assertIn("PRIMARY KEY (transaction_id, line_number)", read_text(SALES_FILE),
+                      "a transaction is a basket: one row per line")
 
     def test_silver_and_quarantine_select_their_schema_columns(self):
         for f, pairs in (("src/pipelines/02_silver.py", (("silver_people_counter_events", "SILVER_SCHEMA"),
@@ -306,7 +310,8 @@ class PipelineCodeTests(unittest.TestCase):
 
 class SimulatedDataTests(unittest.TestCase):
 
-    def test_store_dimension_has_200_stores(self):
+    def test_store_dimension_has_200_physical_stores(self):
+        """The city allocation: 200 physical stores (RETAIL and FLAGSHIP); the 13 ECOM stores come on top."""
         self.assertEqual(len(_store_ids()), 200)
 
     def test_simulated_events_insert_is_idempotent(self):
@@ -342,6 +347,32 @@ class DocsTests(unittest.TestCase):
         self.assertIn("@readme.md", text)
         self.assertIn("python -m unittest discover -s tests", text)
         self.assertIn("**Mandatory: never commit or push.**", text)
+
+    def test_solution_overview_matches_the_project(self):
+        """doc/architecture.md is presented to others: its names and claims must be the project's."""
+        doc = read_text("doc", "architecture.md")
+        for name in ("simulated_event_source", "simulated_sales_source", "simulation_id",
+                     "current_people_counter_events", "current_sales_transactions", "dim_store", "dim_client",
+                     "dim_product", "Simulation engine", "BI engine", "Data pipeline"):
+            self.assertIn(name, doc)
+        # Three separate bundles.
+        names = [re.search(r'name: "(\w+)"', read_text(*p, "databricks.yml")).group(1)
+                 for p in ((), ("apps", "people_stream"), ("apps", "sales_dashboard"))]
+        self.assertEqual(len(set(names)), 3)
+        self.assertIn("Three separate bundles", doc)
+        # The dashboard may only read the views and two dimensions; the simulator may only write the sources.
+        dash = read_text("apps", "sales_dashboard", "resources", "sales_dashboard.app.yml")
+        self.assertNotIn("MODIFY", dash)
+        self.assertNotIn("silver_", re.sub(r"#[^\n]*", "", dash), "the dashboard has no access to the silver tables")
+        sim_app = read_text("apps", "people_stream", "resources", "people_stream.app.yml")
+        modify = re.findall(r"\.(\w+)\s*\n\s*securable_type: TABLE\s*\n\s*permission: MODIFY", sim_app)
+        self.assertEqual(sorted(modify), ["simulated_event_source", "simulated_sales_source"])
+        # Rule counts quoted in the overview.
+        self.assertEqual((len(_rejection_codes()), len(_rejection_codes(SALES_FILE, "sales_rejection_reasons"))),
+                         (8, 11))
+        self.assertIn("8 rules for events, 11 for sales", doc)
+        for figure in ("**200 stores**", "100,000", "About 1,097 EUR", "Every 5 seconds"):
+            self.assertIn(figure, doc)
 
     def test_readme_lists_every_test_file(self):
         readme = read_text("readme.md")

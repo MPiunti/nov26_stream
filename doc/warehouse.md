@@ -4,6 +4,7 @@ Reference for how the project's tables are organised: which schema holds what, t
 
 | Page | Covers |
 |---|---|
+| [`architecture.md`](architecture.md) | The whole solution on one page: the three engines and the data contracts between them |
 | [`dataset.md`](dataset.md) | The store dimension (`dim_store`), flagships, the people-counter events, opening hours, volumes |
 | [`client.md`](client.md) | The client dimension (`dim_client`) and how buyers are chosen (local clients and visitors) |
 | [`product.md`](product.md) | The product dimension (`dim_product`), categories and prices |
@@ -28,7 +29,7 @@ The pipeline and the apps read the dimensions from `test02_warehouse`; the pipel
 
 | Table | Schema | Grain | Primary key (natural) | Rows | Reference |
 |---|---|---|---|---|---|
-| `dim_store` | `test02_warehouse` | One store | `store_id`, e.g. `IT-MI-001` | 200 (2 flagships) | `dataset.md` §2 |
+| `dim_store` | `test02_warehouse` | One store | `store_id`, e.g. `IT-MI-001`, `IT-EC-001` | 213: 198 `RETAIL`, 2 `FLAGSHIP`, 13 `ECOM` (`channel`) | `dataset.md` §2 |
 | `dim_client` | `test02_warehouse` | One registered client | `client_id`, e.g. `CL-IT-0000001` | 100,000 | `client.md` |
 | `dim_product` | `test02_warehouse` | One product (SKU) | `product_id`, e.g. `SH-0007` | 120 | `product.md` |
 | `simulated_event_source` | `test02_streaming` | One people-counter message | `source_topic` + `source_partition` + `source_offset` | per run | `dataset.md` §3, `people_stream.md` |
@@ -66,7 +67,7 @@ All scripts are in `src/sql/`, run by hand on the SQL warehouse, in number order
 
 | Step | Scripts | Result |
 |---|---|---|
-| Stores | `01` (creates the `test02_warehouse` schema and `dim_store`), `02`, check `03` | 200 stores, 2 flagships |
+| Stores | `01` (creates the `test02_warehouse` schema and `dim_store`), `02`, check `03`. An older `dim_store` without `channel`: `16` once, before `02` | 213 stores: 200 physical (2 flagships), 13 e-commerce |
 | People source | `04` (creates the `test02_streaming` schema and the source), optionally `05`, check `06` | Empty source, or the 8 hand-written events |
 | Clients and products | `08`, `09`, `10`, `11`, check `13` | 100,000 clients, 120 products |
 | Sales source | `12` | Empty sales source |

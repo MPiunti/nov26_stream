@@ -24,6 +24,7 @@ CATEGORY_LABEL = {"SHOES": "Shoes", "BAGS": "Bags", "READY_TO_WEAR": "Ready-to-w
 REGION_LABEL = {"EUROPE": "Europe", "AMERICAS": "Americas", "ASIA": "Asia"}
 GEO_LEVEL_LABEL = {"REGION": "Area", "COUNTRY": "Country", "STORE": "Store"}
 PRODUCT_LEVEL_LABEL = {"CATEGORY": "Merch. category", "PRODUCT": "Product"}
+CHANNEL_LABEL = {"RETAIL": "Retail", "FLAGSHIP": "Flagship", "ECOM": "E-commerce"}
 CARDS = ("VALUE", "QUANTITY", "AVG_PRICE", "PEOPLE_IN", "ITEMS_PER_VISITOR")
 CARD_LABEL = {"VALUE": "VALUE", "QUANTITY": "QUANTITY", "AVG_PRICE": "AVG PRICE", "PEOPLE_IN": "PEOPLE IN",
               "ITEMS_PER_VISITOR": "ITEMS PER VISITOR"}
@@ -97,10 +98,9 @@ def sidebar():
         dcc.Dropdown(id="countries", multi=True, placeholder="All countries"),
         label("Store"),
         dcc.Dropdown(id="stores", multi=True, placeholder="All stores"),
-        label("Store type"),
-        dbc.RadioItems(id="store-type", value="ALL", inline=True,
-                       options=[{"label": "All", "value": "ALL"}, {"label": "Flagships", "value": "FLAGSHIP"},
-                                {"label": "Others", "value": "OTHER"}], **BUTTONS),
+        label("Channel"),
+        dbc.Checklist(id="channels", value=[], inline=True,
+                      options=[{"label": CHANNEL_LABEL[c], "value": c} for c in q.CHANNELS], **BUTTONS),
         label("Merch. category"),
         dbc.Checklist(id="categories", value=[], inline=True,
                       options=[{"label": CATEGORY_LABEL[c], "value": c} for c in CATEGORIES], **BUTTONS),
@@ -143,6 +143,19 @@ def footer():
                     className="footer d-flex flex-wrap justify-content-end align-items-center gap-1 tiny")
 
 
+def channel_panel():
+    """Sales (or people) by channel: Retail, Flagship, E-commerce. A click on a bar filters the page on it."""
+    return panel([
+        html.Div([
+            html.Div(id="channel-title", className="panel-title"),
+            html.Div(id="channel-path", className="tiny text-muted text-end"),
+        ], className="d-flex justify-content-between flex-wrap gap-1"),
+        html.Div(dbc.Button("✕ All channels", id="channel-up", color="secondary", outline=True, size="sm",
+                            className="mb-1"), className="level mt-1"),
+        dcc.Graph(id="channel-chart", config={"displayModeBar": False}),
+    ], height="100%")
+
+
 app.layout = html.Div([
     dbc.Row([
         dbc.Col(sidebar(), xs=12, md=3, xl=2, className="mb-2"),
@@ -150,13 +163,16 @@ app.layout = html.Div([
             html.Div(id="alert"),
             dbc.Row([dbc.Col(html.Div(id=f"card-{k}"), xs=6, sm=4, lg=True, className="mb-2") for k in CARDS],
                     className="g-2"),
-            panel([
-                html.Div([
-                    html.Div(id="trend-title", className="panel-title"),
-                    dbc.Switch(id="cumulative", value=True, label="Cumulative", className="tiny mb-0"),
-                ], className="d-flex justify-content-between align-items-center flex-wrap"),
-                dcc.Graph(id="trend", config={"displayModeBar": False}),
-            ], marginBottom="8px"),
+            dbc.Row([
+                dbc.Col(panel([
+                    html.Div([
+                        html.Div(id="trend-title", className="panel-title"),
+                        dbc.Switch(id="cumulative", value=True, label="Cumulative", className="tiny mb-0"),
+                    ], className="d-flex justify-content-between align-items-center flex-wrap"),
+                    dcc.Graph(id="trend", config={"displayModeBar": False}),
+                ], height="100%"), xs=12, lg=8, className="mb-2"),
+                dbc.Col(channel_panel(), xs=12, lg=4, className="mb-2"),
+            ], className="g-2"),
             dbc.Row([
                 dbc.Col(breakdown_panel("geo", GEO_LEVEL_LABEL, "REGION"), xs=12, lg=6, className="mb-2"),
                 dbc.Col(breakdown_panel("product", PRODUCT_LEVEL_LABEL, "CATEGORY"), xs=12, lg=6, className="mb-2"),
@@ -176,10 +192,10 @@ app.layout = html.Div([
 
 # ------------------------------------------------------------------ callbacks
 
-def make_filters(dates, regions, countries, stores, store_type, categories, products):
+def make_filters(dates, regions, countries, stores, channels, categories, products):
     return q.Filters(dates=tuple(dates or ()), regions=tuple(regions or ()), countries=tuple(countries or ()),
                      stores=tuple(stores or ()), categories=tuple(categories or ()), products=tuple(products or ()),
-                     store_type=store_type or "ALL")
+                     channels=tuple(channels or ()))
 
 
 @app.callback(Output("refresh", "disabled"), Input("live", "value"))
@@ -227,35 +243,39 @@ app.clientside_callback(
 
 @app.callback(
     Output("dates", "value"), Output("regions", "value"), Output("countries", "value"), Output("stores", "value"),
-    Output("store-type", "value"), Output("categories", "value"), Output("products", "data"),
+    Output("channels", "value"), Output("categories", "value"), Output("products", "data"),
     Output("geo-level", "value"), Output("product-level", "value"),
-    Output("geo-chart", "clickData"), Output("product-chart", "clickData"),
-    Input("geo-chart", "clickData"), Input("product-chart", "clickData"),
-    Input("geo-up", "n_clicks"), Input("product-up", "n_clicks"), Input("reset", "n_clicks"),
+    Output("geo-chart", "clickData"), Output("product-chart", "clickData"), Output("channel-chart", "clickData"),
+    Input("geo-chart", "clickData"), Input("product-chart", "clickData"), Input("channel-chart", "clickData"),
+    Input("geo-up", "n_clicks"), Input("product-up", "n_clicks"), Input("channel-up", "n_clicks"),
+    Input("reset", "n_clicks"),
     State("dates", "value"), State("regions", "value"), State("countries", "value"), State("stores", "value"),
-    State("store-type", "value"), State("categories", "value"), State("products", "data"),
+    State("channels", "value"), State("categories", "value"), State("products", "data"),
     State("geo-level", "value"), State("product-level", "value"),
     prevent_initial_call=True,
 )
-def drill(geo_click, product_click, _geo_up, _product_up, _reset,
-          dates, regions, countries, stores, store_type, categories, products, geo_level, product_level):
+def drill(geo_click, product_click, channel_click, _geo_up, _product_up, _channel_up, _reset,
+          dates, regions, countries, stores, channels, categories, products, geo_level, product_level):
     """Click a bar to drill down, Up to drill up, Reset to clear every filter."""
     trigger = ctx.triggered_id
     if trigger == "reset":
-        return [], [], [], [], "ALL", [], [], "REGION", "CATEGORY", None, None
-    f = make_filters(dates, regions, countries, stores, store_type, categories, products)
+        return [], [], [], [], [], [], [], "REGION", "CATEGORY", None, None, None
+    f = make_filters(dates, regions, countries, stores, channels, categories, products)
     levels = {"GEO": geo_level, "PRODUCT": product_level}
-    if trigger in ("geo-chart", "product-chart"):
-        click = geo_click if trigger == "geo-chart" else product_click
+    charts = {"geo-chart": ("GEO", geo_click), "product-chart": ("PRODUCT", product_click),
+              "channel-chart": ("CHANNEL", channel_click)}
+    ups = {"geo-up": "GEO", "product-up": "PRODUCT", "channel-up": "CHANNEL"}
+    if trigger in charts:
+        dimension, click = charts[trigger]
         point = (click or {}).get("points", [{}])[0]
         member = point.get("customdata")
         if member is None:
-            return (no_update,) * 9 + (None, None)
-        f, levels = bi.drill_down(f, levels, "GEO" if trigger == "geo-chart" else "PRODUCT", member)
-    elif trigger in ("geo-up", "product-up"):
-        f, levels = bi.drill_up(f, levels, "GEO" if trigger == "geo-up" else "PRODUCT")
-    return (list(f.dates), list(f.regions), list(f.countries), list(f.stores), f.store_type, list(f.categories),
-            list(f.products), levels["GEO"], levels["PRODUCT"], None, None)
+            return (no_update,) * 9 + (None, None, None)
+        f, levels = bi.drill_down(f, levels, dimension, member)
+    elif trigger in ups:
+        f, levels = bi.drill_up(f, levels, ups[trigger])
+    return (list(f.dates), list(f.regions), list(f.countries), list(f.stores), list(f.channels), list(f.categories),
+            list(f.products), levels["GEO"], levels["PRODUCT"], None, None, None)
 
 
 @app.callback(Output("countries", "options"), Output("stores", "options"),
@@ -309,26 +329,29 @@ def _epoch_ms(value):
     Output("trend-title", "children"), Output("trend", "figure"),
     Output("geo-title", "children"), Output("geo-path", "children"), Output("geo-chart", "figure"),
     Output("product-title", "children"), Output("product-path", "children"), Output("product-chart", "figure"),
+    Output("channel-title", "children"), Output("channel-path", "children"), Output("channel-chart", "figure"),
     Output("dates", "options"), Output("ts-refresh", "children"), Output("ts-sales", "children"),
     Output("ts-people", "children"), Output("foot-rows", "children"), Output("fresh-ms", "data"),
     Output("alert", "children"), Output("snapshot", "data"),
     Output("done", "data"),
     Input("tick", "data"), Input("kpi", "value"), Input("cumulative", "value"),
     Input("dates", "value"), Input("regions", "value"), Input("countries", "value"), Input("stores", "value"),
-    Input("store-type", "value"), Input("categories", "value"), Input("products", "data"),
+    Input("channels", "value"), Input("categories", "value"), Input("products", "data"),
     Input("geo-level", "value"), Input("product-level", "value"),
     State("snapshot", "data"),
 )
-def refresh(tick, kpi, cumulative, dates, regions, countries, stores, store_type, categories, products,
+def refresh(tick, kpi, cumulative, dates, regions, countries, stores, channels, categories, products,
             geo_level, product_level, snapshot):
-    f = make_filters(dates, regions, countries, stores, store_type, categories, products)
+    f = make_filters(dates, regions, countries, stores, channels, categories, products)
     product_kpi = kpi if kpi in bi.SALES_KPIS else "VALUE"  # people aren't counted per product
-    geo_sql = (q.people_breakdown_sql if kpi == "PEOPLE_IN" else q.sales_breakdown_sql)(f, q.GEO_LEVELS[geo_level])
+    by_member = q.people_breakdown_sql if kpi == "PEOPLE_IN" else q.sales_breakdown_sql
+    geo_sql = by_member(f, q.GEO_LEVELS[geo_level])
     res = wh.query_many({
         "sales": q.sales_trend_sql(f),
         "people": q.people_trend_sql(f),
         "geo": geo_sql,
         "product": q.sales_breakdown_sql(f, q.PRODUCT_LEVELS[product_level]),
+        "channel": by_member(f, q.CHANNEL_LEVEL),
         "fresh": q.freshness_sql(),
     })
     try:
@@ -346,7 +369,7 @@ def refresh(tick, kpi, cumulative, dates, regions, countries, stores, store_type
                           color="warning", className="mb-2 py-1 tiny")
         if "sales" in errors or "people" in errors or "dims" in errors:
             nothing = figures.empty("Waiting for the silver tables")
-            return ([no_update] * len(CARDS) + ["", nothing, "", "", nothing, "", "", nothing,
+            return ([no_update] * len(CARDS) + ["", nothing, "", "", nothing, "", "", nothing, "", "", nothing,
                                                 no_update] + [no_update] * 5 + [alert, snapshot, tick])
 
     sales_rows, people_rows = bi.normalize(res["sales"]), bi.normalize(res["people"])
@@ -368,6 +391,8 @@ def refresh(tick, kpi, cumulative, dates, regions, countries, stores, store_type
 
     geo_fig = chart("geo", kpi, dims.geo_labels(geo_level))
     product_fig = chart("product", product_kpi, dims.product_labels(product_level))
+    channel_fig = chart("channel", kpi, CHANNEL_LABEL)
+    channel_path = ", ".join(CHANNEL_LABEL[c] for c in f.channels) if f.channels else "All channels"
     geo_path = " › ".join(["All areas"] + [REGION_LABEL.get(r, r) for r in f.regions]
                           + [dims.geo_labels("COUNTRY").get(c, c) for c in f.countries]
                           + ([f"{len(f.stores)} store(s)"] if f.stores else []))
@@ -396,6 +421,7 @@ def refresh(tick, kpi, cumulative, dates, regions, countries, stores, store_type
                      geo_path, geo_fig,
                      f"PRODUCT · {bi.KPIS[product_kpi][0].upper()} BY "
                      f"{PRODUCT_LEVEL_LABEL[product_level].upper()}, PER GMT DATE", product_path, product_fig,
+                     f"CHANNEL · {kpi_label.upper()} BY CHANNEL, PER GMT DATE", channel_path, channel_fig,
                      date_options] + foot + [fresh_ms, alert, {"signature": sig, "totals": current}, tick])
 
 

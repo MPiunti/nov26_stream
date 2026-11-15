@@ -17,6 +17,8 @@ _SCHEMA = {
     "avg_stay_minutes": {"default": int, "min": int, "max": int, "step": int},
     "clients": {"local_share": int},
     "flagships": {"store_ids": list, "traffic_pct": int, "local_share": int},
+    "cockpit": {"sales": int, "ecommerce": int},
+    "ecommerce": {"share_pct": int, "high_share_pct": int, "high_share_countries": list, "price_pct": int},
     "n_avg_people": {"default": {r: int for r in REGIONS}, "min": int, "max": int, "step": int},
     "purchase_prob": {"default": {r: {c: int for c in CATEGORIES} for r in REGIONS},
                       "min": int, "max": int, "step": int},
@@ -37,6 +39,12 @@ class ShopConfig:
     flagship_ids: tuple
     flagship_traffic_pct: int   # entering people vs N_AVG_PEOPLE, percent
     flagship_local_share: int
+    cockpit_sales: bool          # start value of the cockpit's sales switch
+    cockpit_ecommerce: bool      # start value of the cockpit's e-commerce switch
+    ecom_share_pct: int          # ECOM percent of a country's total sales value
+    ecom_high_share_pct: int     # the same in ecom_high_share_countries
+    ecom_high_share_countries: tuple
+    ecom_price_pct: int          # online price, percent of list price
     n_avg_default: dict
     n_avg_min: int
     n_avg_max: int
@@ -48,6 +56,10 @@ class ShopConfig:
     real_seconds_per_sim_day: int
     max_run_sim_hours: int
     tick_seconds: int
+
+    def ecom_share(self, country_code):
+        """ECOM percent of the country's total sales value."""
+        return self.ecom_high_share_pct if country_code in self.ecom_high_share_countries else self.ecom_share_pct
 
     @property
     def time_scale(self):
@@ -117,12 +129,18 @@ def load(path=CONFIG_PATH):
         data = parse(f.read())
     _check_shape(data, _SCHEMA)
     s, n, p, sim = data["stores"], data["n_avg_people"], data["purchase_prob"], data["simulation"]
-    a, c, f = data["avg_stay_minutes"], data["clients"], data["flagships"]
+    a, c, f, e = data["avg_stay_minutes"], data["clients"], data["flagships"], data["ecommerce"]
+    k = data["cockpit"]
+    if any(v not in (0, 1) for v in k.values()):
+        raise ValueError("shop_config.yml: cockpit: sales and ecommerce must be 1 (on) or 0 (off)")
     cfg = ShopConfig(
         opening_hour=s["opening_hour"], closing_hour=s["closing_hour"], max_stay_minutes=s["max_stay_minutes"],
         avg_stay_default=a["default"], avg_stay_min=a["min"], avg_stay_max=a["max"], avg_stay_step=a["step"],
         local_share=c["local_share"], flagship_ids=tuple(f["store_ids"]), flagship_traffic_pct=f["traffic_pct"],
         flagship_local_share=f["local_share"],
+        cockpit_sales=bool(k["sales"]), cockpit_ecommerce=bool(k["ecommerce"]),
+        ecom_share_pct=e["share_pct"], ecom_high_share_pct=e["high_share_pct"],
+        ecom_high_share_countries=tuple(e["high_share_countries"]), ecom_price_pct=e["price_pct"],
         n_avg_default=dict(n["default"]), n_avg_min=n["min"], n_avg_max=n["max"], n_avg_step=n["step"],
         purchase_prob_default={r: dict(p["default"][r]) for r in REGIONS},
         prob_min=p["min"], prob_max=p["max"], prob_step=p["step"],
@@ -148,6 +166,15 @@ def load(path=CONFIG_PATH):
     for store_id in cfg.flagship_ids:
         if not re.fullmatch(r"[A-Z]{2}-[A-Z]{2}-\d{3}", store_id):
             problems.append(f"flagships.store_ids: {store_id} isn't a store id like IT-MI-001")
+    for name, share in (("ecommerce.share_pct", cfg.ecom_share_pct),
+                        ("ecommerce.high_share_pct", cfg.ecom_high_share_pct)):
+        if not 0 <= share < 100:
+            problems.append(f"{name}: must be a percent of total sales, 0..99")
+    if not 0 < cfg.ecom_price_pct <= 100:
+        problems.append("ecommerce.price_pct: must be a percent of list price, 1..100")
+    for country in cfg.ecom_high_share_countries:
+        if not re.fullmatch(r"[A-Z]{2}", country):
+            problems.append(f"ecommerce.high_share_countries: {country} isn't a country code like US")
     if not 0 < cfg.n_avg_min <= cfg.n_avg_max or cfg.n_avg_step <= 0:
         problems.append("n_avg_people: need 0 < min <= max and step > 0")
     elif (cfg.n_avg_max - cfg.n_avg_min) % cfg.n_avg_step:
@@ -202,6 +229,15 @@ def describe(cfg):
         ("flagships", f"{', '.join(cfg.flagship_ids)}: traffic {cfg.flagship_traffic_pct}%, "
          f"{cfg.flagship_local_share}% local",
          "Flagship stores: more entering people and more visitors"),
+        ("cockpit.sales / ecommerce", f"sales {'on' if cfg.cockpit_sales else 'off'}, "
+         f"e-commerce {'on' if cfg.cockpit_ecommerce else 'off'}",
+         "Start values of the cockpit switches; e-commerce runs only while sales are on"),
+        ("ecommerce.share_pct / high_share_pct", f"{cfg.ecom_share_pct}% of a country's sales value; "
+         f"{cfg.ecom_high_share_pct}% in {', '.join(cfg.ecom_high_share_countries)}",
+         "E-commerce stores (channel ECOM, one per country): online sales on top of the stores' sales, "
+         "no people counting"),
+        ("ecommerce.price_pct", f"{cfg.ecom_price_pct}% of list price",
+         f"Online price: the average e-commerce transaction is {100 - cfg.ecom_price_pct}% lower than in the stores"),
         ("n_avg_people.default", " / ".join(f"{r.title()} {_num(d[r])}" for r in REGIONS),
          "Average visitors per store per simulated day; slider start values"),
         ("n_avg_people.min / max / step", f"{_num(cfg.n_avg_min)} - {_num(cfg.n_avg_max)}, step {cfg.n_avg_step}",

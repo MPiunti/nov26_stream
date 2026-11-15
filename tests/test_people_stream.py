@@ -529,7 +529,8 @@ class ShopConfigTests(unittest.TestCase):
         rows = shop_config.describe(shop_config.load())
         self.assertEqual([r[1] for r in rows], [
             "10:00 - 20:00", "90 min = 1.5 h", "45 min (slider 5 - 85, step 5)", "70% local, 30% visitors",
-            "IT-MI-001, US-NY-001: traffic 145%, 30% local",
+            "IT-MI-001, US-NY-001: traffic 145%, 30% local", "sales on, e-commerce on",
+            "10% of a country's sales value; 15% in US, CN", "90% of list price",
             "Europe 3,000 / Americas 3,000 / Asia 3,000", "2,000 - 6,000, step 100",
             "All regions: SHOES 5%, BAGS 2%, READY_TO_WEAR 6%, ACCESSORIES 3%, TRAVEL 2%, SUNGLASSES 2%",
             "0% - 100%, step 1",
@@ -641,6 +642,56 @@ class SimulationIdTests(unittest.TestCase):
         self.assertIn('"Simulation id"', app)
 
 
+@unittest.skipIf(sim is None, SKIP_REASON)
+class HeadlineTests(unittest.TestCase):
+
+    RUNNING = {"state": "RUNNING", "run_id": "20261114T201229280", "batches": 3,
+               "start_utc": "2026-11-14 20:12:29+00:00", "sim_utc": "2026-11-14 21:42:29+00:00"}
+
+    def test_headline_shows_simulation_id_start_and_simulated_time_in_gmt(self):
+        h = sim.headline(self.RUNNING)
+        self.assertEqual((h["simulation_id"], h["started"], h["simulated"]),
+                         ("20261114T201229280", "14 Nov 2026 20:12:29 GMT", "14 Nov 2026 21:42:29 GMT"))
+        idle = sim.headline({"state": "STOPPED", "run_id": None, "start_utc": None, "sim_utc": None})
+        self.assertEqual((idle["simulation_id"], idle["started"], idle["simulated"]), ("—", "—", "—"))
+        self.assertEqual(sim.clock_class(idle), "sim-clock idle")
+        self.assertEqual(sim.gmt_text("2026-11-14T22:12:29+02:00"), "14 Nov 2026 20:12:29 GMT", "converted to GMT")
+
+    def test_clock_hands_point_at_the_simulated_time(self):
+        for text, hour, minute in (("2026-11-14 21:42:00+00:00", 9 * 30 + 42 * 0.5, 42 * 6),
+                                   ("2026-11-14 12:00:00+00:00", 0, 0), ("2026-11-14 06:30:00+00:00", 195, 180)):
+            h, m = sim.clock_angles(text)
+            self.assertAlmostEqual(h % 360, hour, msg=text)
+            self.assertAlmostEqual(m % 360, minute, msg=text)
+        self.assertEqual(sim.clock_angles(None), (0.0, 0.0))
+
+    def test_clock_hands_only_turn_forwards(self):
+        """Angles grow with time, also across 12 o'clock and midnight, so the animation never runs backwards."""
+        start = datetime(2026, 11, 14, 11, 30, tzinfo=timezone.utc)
+        angles = [sim.clock_angles(start + i * HALF_HOUR) for i in range(60)]  # 30 hours, one batch each
+        for (h0, m0), (h1, m1) in zip(angles, angles[1:]):
+            self.assertAlmostEqual(h1 - h0, 15)   # 30 minutes on the hour hand
+            self.assertAlmostEqual(m1 - m0, 180)  # and on the minute hand
+
+    def test_hands_are_animated_only_between_batches(self):
+        self.assertEqual(sim.clock_class(sim.headline(self.RUNNING)), "sim-clock moving")
+        first = sim.headline({**self.RUNNING, "batches": 1})
+        self.assertEqual(sim.clock_class(first), "sim-clock", "the first batch jumps: no spin through 1970-today")
+        self.assertEqual(sim.clock_class(sim.headline({**self.RUNNING, "state": "FINISHED"})), "sim-clock")
+
+    def test_app_has_the_headline_panel(self):
+        app = read_text(*APP, "app", "app.py")
+        for component_id in ("headline-simulation-id", "headline-started", "headline-simulated", "hand-hour",
+                             "hand-minute", "sim-clock"):
+            self.assertIn(f'id="{component_id}"', app)
+            self.assertRegex(app, rf'Output\("{component_id}", "(children|style|className)"\)')
+        self.assertIn("headline_panel(sim.headline(snapshot))", app, "a page opened mid-run shows the hands in place")
+        self.assertIn("for i in range(12)", app, "twelve hour marks")
+        css = read_text(*APP, "app", "assets", "clock.css")
+        self.assertIn(".sim-clock.moving .hand { transition: transform", css)
+        self.assertNotRegex(css, r"\.sim-clock \.hand \{[^}]*transition", "no animation outside a running simulation")
+
+
 class PeopleStreamDocTests(unittest.TestCase):
 
     def test_doc_matches_simulator_constants(self):
@@ -650,6 +701,12 @@ class PeopleStreamDocTests(unittest.TestCase):
                      "**10:00 and 20:00 local time**", "`people-counter-app`",
                      "`0` EUROPE, `1` AMERICAS, `2` ASIA",
                      "At most 48 simulated hours = 480 real seconds"):
+            self.assertIn(text, doc)
+
+    def test_doc_describes_the_headline_panel(self):
+        doc = read_text("doc", "people_stream.md")
+        for text in ("**Headline panel**", "**Analog clock**", "`14 Nov 2026 20:42:29 GMT`", "`20261114T201229280`",
+                     "The hands only turn forwards"):
             self.assertIn(text, doc)
 
     def test_readme_lists_app_files(self):

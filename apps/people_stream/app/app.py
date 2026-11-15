@@ -189,6 +189,26 @@ def headline_panel(h):
     ], className="g-3 align-items-center")), className="sim-headline mb-3 shadow-sm")
 
 
+def cockpit(snapshot):
+    """Under START/STOP: whether sales are produced and, with them, the e-commerce sales."""
+    return dbc.Card(dbc.CardBody(dbc.Row([
+        dbc.Col(html.Div("Cockpit", className="fw-semibold"), md="auto"),
+        dbc.Col([
+            dbc.Switch(id="cockpit-sales", value=snapshot["sales_enabled"], label="Sales transactions",
+                       className="mb-0"),
+            html.Div("Each person leaving a store buys with PURCHASE_PROB; everything one buyer buys is one "
+                     "transaction", className="small text-muted"),
+        ], md=5),
+        dbc.Col([
+            dbc.Switch(id="cockpit-ecommerce", value=snapshot["ecommerce_enabled"], label="E-commerce sales",
+                       disabled=not snapshot["sales_enabled"], className="mb-0"),
+            html.Div(f"Online orders on top of the stores' sales: {CFG.ecom_share_pct}% of a country's sales "
+                     f"({CFG.ecom_high_share_pct}% in {', '.join(CFG.ecom_high_share_countries)}); only while "
+                     "sales are on", className="small text-muted"),
+        ], md=5),
+    ], className="g-3 align-items-center")), className="mb-3 shadow-sm")
+
+
 def serve_layout():
     # Built per page load, so the sliders show the running simulation's values.
     snapshot = simulation.snapshot()
@@ -215,6 +235,7 @@ def serve_layout():
             ], md="auto"),
             dbc.Col(html.Div(id="state"), className="d-flex align-items-center"),
         ], className="g-3")), className="mb-3 shadow-sm"),
+        cockpit(snapshot),
         dbc.Tabs(id="tabs", active_tab="tab-simulator", className="mb-3", children=[
             dbc.Tab(label="Simulator", tab_id="tab-simulator", children=simulator_tab(n_avg)),
             dbc.Tab(label="Counters", tab_id="tab-counters", children=counters_tab()),
@@ -230,6 +251,14 @@ def serve_layout():
 
 
 app.layout = serve_layout
+
+
+@app.callback(Output("cockpit-ecommerce", "disabled"), Input("cockpit-sales", "value"),
+              Input("cockpit-ecommerce", "value"))
+def set_cockpit(sales_on, ecommerce_on):
+    """Applies from the next batch, also while running. E-commerce follows sales: off while sales are off."""
+    simulation.set_cockpit(sales_on, ecommerce_on)
+    return not sales_on
 
 
 @app.callback(Output("sink-buttons", "data"), Input("start", "n_clicks"), Input("stop", "n_clicks"),
@@ -314,13 +343,19 @@ def refresh_daily(kind, _version):
 
 
 def sales_stats(s):
-    """Per region: transactions per category, total transactions, amount and transactions per person out."""
+    """Per region: the stores' transactions per category, total, amount, per person out and local share;
+    then the e-commerce transactions, amount and share of the total sales value."""
     header = html.Thead(html.Tr([html.Th("Region")] + [html.Th(CATEGORY_LABEL[c], className="text-end")
                                                        for c in sim.CATEGORIES]
                                 + [html.Th("Transactions", className="text-end"),
+                                   html.Th("Items / transaction", className="text-end"),
                                    html.Th("Amount (EUR)", className="text-end"),
-                                   html.Th("Per person out", className="text-end"),
-                                   html.Th("Local clients", className="text-end")]))
+                                   html.Th("Conversion", className="text-end",
+                                           title="Buyers (transactions) per person leaving"),
+                                   html.Th("Local clients", className="text-end"),
+                                   html.Th("E-commerce transactions", className="text-end"),
+                                   html.Th("E-commerce amount (EUR)", className="text-end"),
+                                   html.Th("E-commerce share", className="text-end")]))
     rows = []
     for r in sim.REGIONS:
         x = s["sales"][r]
@@ -328,10 +363,16 @@ def sales_stats(s):
         rows.append(html.Tr([html.Td(REGION_LABEL[r])]
                             + [html.Td(f"{x['by_category'][c]:,}", className="text-end") for c in sim.CATEGORIES]
                             + [html.Td(f"{x['transactions']:,}", className="text-end fw-semibold"),
+                               html.Td(f"{x['items'] / x['transactions']:.2f}" if x["transactions"] else "-",
+                                       className="text-end"),
                                html.Td(f"{x['amount']:,.0f}", className="text-end"),
                                html.Td(f"{per_person:.1%}", className="text-end"),
                                html.Td(f"{x['local'] / x['transactions']:.0%}" if x["transactions"] else "-",
-                                       className="text-end")]))
+                                       className="text-end"),
+                               html.Td(f"{x['ecom_transactions']:,}", className="text-end fw-semibold"),
+                               html.Td(f"{x['ecom_amount']:,.0f}", className="text-end"),
+                               html.Td(f"{x['ecom_amount'] / (x['amount'] + x['ecom_amount']):.1%}"
+                                       if x["amount"] + x["ecom_amount"] else "-", className="text-end")]))
     return dbc.Table([header, html.Tbody(rows)], size="sm", responsive=True, className="mb-0")
 
 

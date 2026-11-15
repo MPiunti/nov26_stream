@@ -25,6 +25,8 @@ PRODUCT_TABLE = "workspace.test02_warehouse.dim_product"
 
 SALES_SCHEMA = StructType([
     StructField("transaction_id", StringType(), True),
+    StructField("line_number", IntegerType(), True),
+    StructField("line_count", IntegerType(), True),
     StructField("exit_event_id", StringType(), True),
     StructField("store_id", StringType(), True),
     StructField("client_id", StringType(), True),
@@ -94,7 +96,13 @@ SILVER_SALES_SCHEMA = """
         COMMENT 'Timestamp when the transaction was ingested into Bronze',
 
     transaction_id STRING NOT NULL
-        COMMENT 'Natural key of the transaction',
+        COMMENT 'The transaction (one buyer, one basket): TX-<simulation id>-<sequence>, sortable by purchase time',
+
+    line_number INT NOT NULL
+        COMMENT 'Line of the transaction, 1..line_count: one item per line; with transaction_id, the natural key',
+
+    line_count INT
+        COMMENT 'Lines (items) in the transaction',
 
     exit_event_id STRING
         COMMENT 'event_id of the EXIT people-counter event that triggered the purchase',
@@ -139,7 +147,7 @@ SILVER_SALES_SCHEMA = """
         COMMENT 'Simulation (one START of the people-stream app) that produced the sale; sortable, latest = MAX',
 
     CONSTRAINT pk_silver_sales_transactions
-        PRIMARY KEY (transaction_id),
+        PRIMARY KEY (transaction_id, line_number),
 
     CONSTRAINT fk_silver_sales_store
         FOREIGN KEY (store_id)
@@ -175,6 +183,12 @@ QUARANTINE_SALES_SCHEMA = """
 
     transaction_id STRING
         COMMENT 'Transaction identifier extracted from the payload, when available',
+
+    line_number INT
+        COMMENT 'Line of the transaction, as provided',
+
+    line_count INT
+        COMMENT 'Lines in the transaction, as provided',
 
     exit_event_id STRING
         COMMENT 'Triggering EXIT event identifier, when available',
@@ -247,6 +261,8 @@ def validated_sales():
                 "source_timestamp",
                 "ingestion_timestamp",
                 F.trim(F.col("_tx.transaction_id")).alias("transaction_id"),
+                F.col("_tx.line_number").alias("line_number"),
+                F.col("_tx.line_count").alias("line_count"),
                 F.trim(F.col("_tx.exit_event_id")).alias("exit_event_id"),
                 F.trim(F.col("_tx.store_id")).alias("store_id"),
                 F.trim(F.col("_tx.client_id")).alias("client_id"),
@@ -299,6 +315,14 @@ def validated_sales():
             F.col("transaction_id").isNull() |
             (F.length("transaction_id") == 0),
             "MISSING_TRANSACTION_ID"
+        ),
+
+        F.when(
+            F.col("line_number").isNull() |
+            (F.col("line_number") < 1) |
+            F.col("line_count").isNull() |
+            (F.col("line_number") > F.col("line_count")),
+            "INVALID_LINE_NUMBER"
         ),
 
         F.when(
@@ -378,6 +402,8 @@ def silver_sales_transactions():
                 "source_timestamp",
                 "ingestion_timestamp",
                 "transaction_id",
+                "line_number",
+                "line_count",
                 "exit_event_id",
                 "store_id",
                 "client_id",
@@ -426,6 +452,8 @@ def quarantine_sales_transactions():
                 "source_timestamp",
                 "ingestion_timestamp",
                 "transaction_id",
+                "line_number",
+                "line_count",
                 "exit_event_id",
                 "store_id",
                 "client_id",

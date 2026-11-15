@@ -4,6 +4,8 @@ Functional reference for the sales BI dashboard: a read-only Databricks app that
 
 The data it reads is described in [`sales.md`](sales.md) (transactions and the silver sales rules), [`dataset.md`](dataset.md) (stores, people events) and [`warehouse.md`](warehouse.md) (schemas and keys).
 
+The dashboard is the **BI engine** of the solution; how it stays decoupled from the simulation engine and from the pipeline is explained in [`architecture.md`](architecture.md).
+
 ## 1. Purpose and boundaries
 
 | | |
@@ -30,9 +32,10 @@ One compact page, laid out like a classic sales BI report. **All dates and hours
 
 | Area | Content |
 |---|---|
-| **Filter area** (left) | **KPI on charts** (Sales value, Items sold, Average price, People in); **GMT dates** (the dates found in the silver tables; none = all); **macro region** buttons; **country** and **store** lists (narrowed by the region and country chosen; flagships marked ★); **store type** (All, Flagships, Others); **merch. category** buttons; the **Live** switch; **Reset filters** |
+| **Filter area** (left) | **KPI on charts** (Sales value, Items sold, Average price, People in); **GMT dates** (the dates found in the silver tables; none = all); **macro region** buttons; **country** and **store** lists (narrowed by the region and country chosen; flagships marked ★); **channel** buttons (Retail, Flagship, E-commerce); **merch. category** buttons; the **Live** switch; **Reset filters** |
 | **KPI cards** (top) | VALUE, QUANTITY, AVG PRICE, PEOPLE IN, ITEMS PER VISITOR, each with its **Δ live** (§4). There's no comparison with a previous period |
 | **Trend** | The chosen KPI on the **GMT calendar date and hour** axis, **one line per macro region** in distinct colours (Europe blue, Americas orange, Asia green). Every line covers the same hours; an hour when a region's stores are closed counts as 0. **Cumulative** (on by default) adds up from the first hour, so the lines grow through the run; off, each point is that hour alone. For the average price, an hour without sales is a gap |
+| **Channel** | Next to the trend: horizontal bars of the chosen KPI by **sales channel**, Retail, Flagship and E-commerce (`dataset.md` §2.6), one segment per GMT date. With KPI *People in*, E-commerce has no bar: it has no people counting |
 | **Geography** | Horizontal bars of the chosen KPI by **Area → Country → Store**, largest first (top 15, with a note of how many more). Each bar is **cumulative over the dates**: one segment per GMT date (latest blue, earlier grey), with the total at the end of the bar |
 | **Product** | The same by **Merch. category → Product**. With KPI *People in*, it shows sales value instead: people aren't counted per product |
 | **Footer** | Live freshness chips, all in GMT (§5): **Refreshed** (time of the last refresh), **Last sale** and **Last people event** (the latest simulated time in silver, and when it was ingested), each with a status dot and an age that ticks every second; then the silver row counts |
@@ -52,6 +55,7 @@ The level buttons on the left of each chart ("Select the chart fields") choose w
 | Geography | Store | Add or remove that store in the store filter |
 | Product | Merch. category | Filter on that category, show its products |
 | Product | Product | Add or remove that product in the product filter |
+| Channel | Channel (one level) | Add or remove that channel in the channel filter; **✕ All channels** clears it |
 
 **▲ Up** removes the filter of the current level and the one above it, and goes one level up: Store → Country (clears stores and countries), Country → Area (clears countries and regions), Product → Merch. category (clears products and categories).
 
@@ -60,10 +64,10 @@ The level buttons on the left of each chart ("Select the chart fields") choose w
 | KPI | Definition | Filters that apply |
 |---|---|---|
 | VALUE | `SUM(amount)` of the silver transactions, EUR (transaction values are always in euro, [`sales.md`](sales.md) §11) | All |
-| QUANTITY | `SUM(quantity)`: items sold | All |
+| QUANTITY | `SUM(quantity)`: items sold. A transaction can hold several items, one row each (`sales.md` §5) | All |
 | AVG PRICE | VALUE / QUANTITY | All |
 | PEOPLE IN | `SUM(people_count)` of the silver `ENTRY` events | Dates, geography, store type; **not** category or product |
-| ITEMS PER VISITOR | QUANTITY / PEOPLE IN | As its two parts |
+| ITEMS PER VISITOR | Items sold **in physical stores** (`RETAIL`, `FLAGSHIP`) / PEOPLE IN. E-commerce items are left out: online buyers never pass a people counter | As its two parts |
 
 - **GMT time:** sales use silver's `transaction_timestamp_utc` ([`sales.md`](sales.md) §11.4). People events have only their local `event_timestamp` in silver, so the queries convert it the same way: `convert_timezone(d.timezone_id, 'UTC', s.event_timestamp)`, with the store's time zone from `dim_store`. The date filter and the bar segments are GMT dates.
 - **Δ live:** the change since the previous refresh with the same filters, so it shows how much arrived in the last 5 seconds. It's blank (—) right after a filter change.
@@ -76,7 +80,7 @@ The level buttons on the left of each chart ("Select the chart fields") choose w
 | Source → silver | The continuous job keeps a pipeline update running, with a micro-batch every 2 seconds per table (`pipelines.trigger.interval`); see `readme.md`, "Running the pipeline" |
 | Silver → screen | The dashboard queries silver **every 5 seconds** (`REFRESH_SECONDS` in `app/app.yaml`, at least 2). The **Live** switch stops and restarts the refresh |
 
-Each refresh runs five read-only queries in parallel, all five at once (sales by region, GMT date and hour; people likewise; the geography breakdown; the product breakdown; freshness), on one reused connection per worker thread. Measured on the Serverless Starter Warehouse: about 1.6–1.9 s per query, 3–4 s per refresh. The dimensions are read once and cached.
+Each refresh runs six read-only queries in parallel, all six at once (sales by region, GMT date and hour; people likewise; the geography, product and channel breakdowns; freshness), on one reused connection per worker thread. Measured on the Serverless Starter Warehouse: about 1.6–1.9 s per query, 3–4 s per refresh. The dimensions are read once and cached.
 
 **Footer freshness:** each chip shows a time in GMT and how long ago it was, recomputed in the browser every second, so the ages keep counting between refreshes and show at once when data stops arriving:
 
@@ -100,7 +104,8 @@ All in `app/dashboard_sql.py`:
 
 - **Read-only:** every statement is a `SELECT`.
 - **Parameterized:** filter values are passed as named parameters (`:region_0`, `:date_0`, …), never pasted into the SQL. Dates must be `YYYY-MM-DD`, levels and store types come from fixed lists, and table names are checked to be `catalog.schema.table`.
-- **Joins:** silver is joined to `dim_store` on the natural key `store_id`, for the region, country and flagship filters, the macro region of each trend line, and the people events' time zone. Store, country and product names come from the cached dimensions.
+- **Joins:** silver is joined to `dim_store` on the natural key `store_id`, for the region, country and channel filters, the channel chart, the macro region of each trend line, and the people events' time zone. Store, country and product names come from the cached dimensions.
+- **Transactions:** `COUNT(DISTINCT transaction_id)`, since a transaction has one row per item. All the rows of a transaction share its store, time and channel, so the counts add up across hours, regions and channels.
 - **Session time zone UTC:** the connection sets `TIMEZONE` = `UTC`, so `TIMESTAMP` columns (`ingestion_timestamp`) come back in GMT too.
 
 ## 7. Deployment and permissions

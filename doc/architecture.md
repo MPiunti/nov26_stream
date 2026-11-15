@@ -4,7 +4,7 @@ The whole solution on one page: what it does, its three independent parts, how t
 
 ## 1. In short
 
-A retail group with **200 stores** in Europe, the Americas and Asia wants to see footfall and sales **while they happen**. This solution shows how, end to end, on Databricks:
+A retail group with **200 stores** in Europe, the Americas and Asia, and an **e-commerce store in each of its 13 countries**, wants to see footfall and sales **while they happen**. This solution shows how, end to end, on Databricks:
 
 - A **simulation engine** plays the stores' day: people entering and leaving, and what they buy.
 - A **streaming data pipeline** checks every event and sale and stores the valid ones, seconds after they happen.
@@ -30,7 +30,7 @@ The three parts are **decoupled**: each can be started, stopped, redeployed or r
 
 | Part | What it is | Its job | Detail |
 |---|---|---|---|
-| **Simulation engine** | The people-stream app | Generates people-counter events for 200 stores and the sales they lead to, and writes them to two source tables, as an event broker would deliver them | [`people_stream.md`](people_stream.md), [`sales.md`](sales.md) |
+| **Simulation engine** | The people-stream app | Generates people-counter events for the 200 physical stores, the sales they lead to, and the online sales of the 13 e-commerce stores, and writes them to two source tables, as an event broker would deliver them | [`people_stream.md`](people_stream.md), [`sales.md`](sales.md) |
 | **Data pipeline** | A streaming pipeline kept running by a continuous job | Bronze keeps every message as received; silver keeps the parsed, typed, valid ones; quarantine keeps the invalid ones with the reason | [`readme.md`](../readme.md), [`warehouse.md`](warehouse.md) |
 | **BI engine** | The sales dashboard app | Self-service sales and footfall analysis, refreshed every 5 seconds, with filters and drill-down | [`sales_dashboard.md`](sales_dashboard.md) |
 
@@ -84,19 +84,22 @@ The pipeline's micro-batch interval is set to 2 seconds; in practice each micro-
 
 | | |
 |---|---|
-| Stores | 200 in 13 countries and 3 macro regions (Europe 100, Americas 60, Asia 40); 2 flagships, Milan and New York ([`dataset.md`](dataset.md)) |
+| Stores | 200 physical stores in 13 countries and 3 macro regions (Europe 100, Americas 60, Asia 40); 2 flagships, Milan and New York ([`dataset.md`](dataset.md)) |
+| Sales channels | **Retail** (198 stores) and **Flagship** (2): sales come from the people counted leaving. **E-commerce** (13, one per country): online sales all day, no people counting, 10% of a country's sales value (15% in the US and China), at prices 10% below the stores ([`sales.md`](sales.md) §12) |
 | Opening hours | 10:00 to 20:00 local time, so some store is open at every hour of the day worldwide |
 | Clients | 100,000; 70% of buyers are local, 30% visitors from another country, inverted at the flagships ([`client.md`](client.md)) |
 | Products | 120 in six merchandise categories, at luxury price points ([`product.md`](product.md)) |
-| Average transaction | About 1,012 EUR; every transaction is one item, always in euro ([`sales.md`](sales.md) §11) |
-| Volumes | About 600,000 visitors and 120,000 transactions per simulated day, about 121 million EUR |
+| Average transaction | About 1,097 EUR in the stores, 984 EUR online: a transaction is one buyer's basket, 1.08 items on average at about 1,012 EUR each, always in euro ([`sales.md`](sales.md) §11) |
+| Transaction ids | One per transaction in every channel, `TX-<simulation>-<sequence>`, numbered in purchase-time order, so they sort by time; one row per item, glued by the id |
+| Cockpit | Under START/STOP in the simulator: switch the sales on or off, and the e-commerce sales with them |
+| Volumes | About 600,000 visitors and 126,000 transactions per simulated day (110,000 in the stores, 16,800 online) with 137,000 items, about 137 million EUR, of which e-commerce about 12% |
 | Time | Sales and events keep the store's local time and, for one worldwide timeline, GMT |
 
 ## 7. Quality and control
 
 | Topic | How it is handled |
 |---|---|
-| **Data quality** | Every event and sale is validated (8 rules for events, 10 for sales). Invalid rows are not lost: they go to a quarantine table with the reasons |
+| **Data quality** | Every event and sale is validated (8 rules for events, 11 for sales). Invalid rows are not lost: they go to a quarantine table with the reasons |
 | **Keys** | Natural business keys everywhere; silver declares its primary and foreign keys to the dimensions |
 | **Access** | Each app runs as its own service principal with only the permissions listed in §3 |
 | **Reproducible deployment** | Everything is code in one Git repository: pipeline, apps, tables, views and documentation. Three bundles deploy it |
@@ -118,5 +121,6 @@ The pipeline's micro-batch interval is set to 2 seconds; in practice each micro-
 |---|---|
 | The source is a simulator writing to tables | Connect Azure Event Hubs; the source tables already have its message envelope |
 | Micro-batches take 4 to 6 seconds | Tune the pipeline's processing per batch, or accept this latency: the simulator itself writes every 5 seconds |
+| E-commerce is sized on the stores' expected sales, with a fixed online curve | Model online traffic too (sessions, conversion), as the stores have people counting |
 | The dashboard shows only the current simulation | Add a simulation selector, to compare runs: silver already keeps them |
 | Free Edition workspace, one SQL warehouse shared by both apps | A paid workspace separates the simulator's writes from the dashboard's queries |

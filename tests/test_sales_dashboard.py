@@ -44,7 +44,7 @@ def _people(date, hour, people_in, people_out=0, region="EUROPE"):
 class QueryTests(unittest.TestCase):
 
     FULL = q.Filters(dates=("2026-11-13", "2026-11-14"), regions=("EUROPE",), countries=("IT",),
-                     stores=("IT-MI-001",), categories=("SHOES",), products=("SH-0001",), store_type="FLAGSHIP")
+                     stores=("IT-MI-001",), categories=("SHOES",), products=("SH-0001",), channels=("FLAGSHIP", "ECOM"))
 
     def test_read_only(self):
         for f in (q.Filters(), self.FULL):
@@ -75,7 +75,7 @@ class QueryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 q.Filters(dates=(bad,))
         with self.assertRaises(ValueError):
-            q.Filters(store_type="ANY")
+            q.Filters(channels=("ONLINE",))
         with self.assertRaises(ValueError):
             q.sales_breakdown_sql(q.Filters(), "d.store_name; DROP TABLE x")
 
@@ -83,11 +83,28 @@ class QueryTests(unittest.TestCase):
         sql, params = q.sales_trend_sql(self.FULL)
         for clause in ("CAST(s.transaction_timestamp_utc AS DATE) IN (CAST(:date_0 AS DATE), CAST(:date_1 AS DATE))",
                        "d.macro_region IN (:region_0)", "d.country_code IN (:country_0)", "d.store_id IN (:store_0)",
-                       "s.category IN (:category_0)", "s.product_id IN (:product_0)", "d.is_flagship"):
+                       "s.category IN (:category_0)", "s.product_id IN (:product_0)",
+                       "d.channel IN (:channel_0, :channel_1)"):
             self.assertIn(clause, sql)
         self.assertEqual(params["date_1"], "2026-11-14")
-        self.assertIn("NOT d.is_flagship", q.sales_trend_sql(q.Filters(store_type="OTHER"))[0])
+        self.assertEqual(params["channel_1"], "ECOM")
         self.assertNotIn("WHERE", q.sales_trend_sql(q.Filters())[0])
+
+    def test_channel_analysis(self):
+        """Sales by channel, filterable; e-commerce items are kept apart for items per visitor."""
+        self.assertEqual(q.CHANNELS, ("RETAIL", "FLAGSHIP", "ECOM"))
+        sql, _ = q.sales_breakdown_sql(q.Filters(), q.CHANNEL_LEVEL)
+        self.assertIn("SELECT d.channel AS member", sql)
+        self.assertIn("SELECT d.channel AS member", q.people_breakdown_sql(q.Filters(), q.CHANNEL_LEVEL)[0])
+        self.assertIn("SUM(CASE WHEN d.channel <> 'ECOM' THEN s.quantity ELSE 0 END) AS store_quantity",
+                      q.sales_trend_sql(q.Filters())[0])
+        self.assertIn("channel", q.stores_sql()[0])
+        app = read_text(*APP, "app", "app.py")
+        for text in ('id="channels"', 'Input("channel-chart", "clickData")', 'Output("channel-chart", "figure")',
+                     '"channel": by_member(f, q.CHANNEL_LEVEL)',
+                     'CHANNEL_LABEL = {"RETAIL": "Retail", "FLAGSHIP": "Flagship", "ECOM": "E-commerce"}'):
+            self.assertIn(text, app)
+        self.assertNotIn("store_type", app + read_text(*APP, "app", "dashboard_sql.py"), "replaced by the channel")
 
     def test_people_ignore_category_and_product(self):
         sql, params = q.people_trend_sql(self.FULL)
@@ -102,7 +119,8 @@ class QueryTests(unittest.TestCase):
         self.assertIn("SELECT d.macro_region AS region, CAST(s.transaction_timestamp_utc AS DATE) AS utc_date, "
                       "HOUR(s.transaction_timestamp_utc) AS utc_hour", sql)
         self.assertIn("GROUP BY 1, 2, 3", sql)
-        self.assertIn("SUM(s.amount) AS value, SUM(s.quantity) AS quantity", sql)
+        self.assertIn("SUM(s.amount) AS value, SUM(s.quantity) AS quantity, "
+                      "COUNT(DISTINCT s.transaction_id) AS transactions", sql, "a transaction is a basket of lines")
         people, _ = q.people_trend_sql(q.Filters())
         self.assertIn("HOUR(convert_timezone(d.timezone_id, 'UTC', s.event_timestamp)) AS utc_hour", people)
         self.assertIn("event_type = 'ENTRY'", people)
@@ -124,7 +142,12 @@ class KpiTests(unittest.TestCase):
         t = bi.totals([_sales("2026-11-13", 10, 1000, 2), _sales("2026-11-13", 11, 500, 1)],
                       [_people("2026-11-13", 10, 30, 20)])
         self.assertEqual((t["VALUE"], t["QUANTITY"], t["AVG_PRICE"], t["PEOPLE_IN"]), (1500, 3, 500, 30))
-        self.assertAlmostEqual(t["ITEMS_PER_VISITOR"], 0.1)
+        self.assertAlmostEqual(t["ITEMS_PER_VISITOR"], 0.0, msg="no store_quantity in these rows")
+        stores = [{**_sales("2026-11-13", 10, 1000, 2), "store_quantity": 2.0},
+                  {**_sales("2026-11-13", 11, 900, 3), "store_quantity": 0.0}]  # 3 items online
+        t = bi.totals(stores, [_people("2026-11-13", 10, 40)])
+        self.assertEqual(t["QUANTITY"], 5)
+        self.assertAlmostEqual(t["ITEMS_PER_VISITOR"], 2 / 40, msg="e-commerce items have no visitors")
         self.assertEqual(bi.totals([], [])["AVG_PRICE"], 0)
 
     def test_live_delta_only_with_the_same_filters(self):
@@ -226,6 +249,16 @@ class DrillTests(unittest.TestCase):
         f, levels = bi.drill_up(f, levels, "PRODUCT")
         self.assertEqual((f.categories, f.products, levels["PRODUCT"]), ((), (), "CATEGORY"))
 
+    def test_channel_click_toggles_the_channel(self):
+        f, levels = bi.drill_down(q.Filters(regions=("ASIA",)), self.START, "CHANNEL", "ECOM")
+        self.assertEqual((f.channels, f.regions, levels), (("ECOM",), ("ASIA",), self.START))
+        f, _ = bi.drill_down(f, levels, "CHANNEL", "RETAIL")
+        self.assertEqual(f.channels, ("ECOM", "RETAIL"))
+        f, _ = bi.drill_down(f, levels, "CHANNEL", "ECOM")
+        self.assertEqual(f.channels, ("RETAIL",))
+        f, _ = bi.drill_up(f, levels, "CHANNEL")
+        self.assertEqual(f.channels, ())
+
     def test_drill_levels_match_the_queries(self):
         self.assertEqual(bi.GEO_PATH, tuple(q.GEO_LEVELS))
         self.assertEqual(bi.PRODUCT_PATH, tuple(q.PRODUCT_LEVELS))
@@ -289,7 +322,7 @@ class AppTests(unittest.TestCase):
         self.assertIn('Output("done", "data")', refresh)
         body = code.split("def refresh(", 1)[1].split("\nif __name__", 1)[0]
         self.assertEqual(body.count(", tick])"), 2, "every return reports its tick as done")
-        self.assertIn("PARALLEL_QUERIES = 5", read_text(*APP, "app", "sql_warehouse.py"))
+        self.assertIn("PARALLEL_QUERIES = 6", read_text(*APP, "app", "sql_warehouse.py"))
 
     def test_footer_shows_live_freshness_in_gmt(self):
         """Refresh, last sale, last people event: GMT times, a status dot and an age ticked every second."""

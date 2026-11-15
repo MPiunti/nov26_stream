@@ -38,6 +38,9 @@ CREATE TABLE IF NOT EXISTS workspace.test02_warehouse.dim_store
     is_flagship BOOLEAN NOT NULL
         COMMENT 'Flagship store: more traffic and more visitors from abroad (doc/dataset.md)',
 
+    channel STRING
+        COMMENT 'Sales channel: RETAIL, FLAGSHIP (both physical, with people counting) or ECOM (online, sales only)',
+
     timezone_id STRING NOT NULL
         COMMENT 'IANA timezone identifier',
 

@@ -55,6 +55,7 @@ For each purchase, the sales simulator picks the buyer like this:
 - **Local client:** one active client whose `country_code` is the store's country (the first two characters of `store_id`), drawn uniformly.
 - **Visitor:** one active client of any other country, drawn uniformly over all of them, so countries with more clients send more visitors.
 - The same client can buy many times. Both shares are in the app's `shop_config.yml` and shown in its Parameters panel (`people_stream.md` §2).
+- **E-commerce:** an online order in a country's e-commerce store (channel `ECOM`) is always placed by a client registered in that country (`sales.md` §12). The e-commerce stores add no clients: `09_…` counts 500 clients per **physical** store.
 
 ## 5. Loading and changing it
 

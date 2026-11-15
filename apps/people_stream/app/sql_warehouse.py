@@ -18,6 +18,7 @@ DEFAULT_TABLES = {
     "PRODUCT_TABLE": "workspace.test02_warehouse.dim_product",
     "SALES_TABLE": "workspace.test02_streaming.simulated_sales_source",
 }
+CHANNELS = ("RETAIL", "FLAGSHIP", "ECOM")  # dim_store.channel
 CHUNK_ROWS = 10000  # rows per MERGE statement (about 3 MB of SQL); each MERGE costs about 1 s however small
 
 
@@ -29,7 +30,7 @@ def table(var):
 
 
 def stores_sql(store_table):
-    return (f"SELECT store_id, macro_region, timezone_id FROM {store_table} "
+    return (f"SELECT store_id, macro_region, timezone_id, channel FROM {store_table} "
             f"WHERE is_active ORDER BY store_id")
 
 
@@ -132,8 +133,13 @@ class Warehouse:
             if "macro_region" in str(exc):
                 raise RuntimeError("dim_store has no macro_region column: run src/sql/01_create_dim_store.sql "
                                    "and 02_populate_dim_store.sql first.") from exc
+            if "channel" in str(exc):
+                raise RuntimeError("dim_store has no channel column: run src/sql/16_add_store_channel.sql "
+                                   "and 02_populate_dim_store.sql first.") from exc
             raise
-        stores = [Store(r[0], r[1], r[2]) for r in rows]
+        if any(r[3] not in CHANNELS for r in rows):
+            raise RuntimeError("some stores have no valid channel: run src/sql/02_populate_dim_store.sql.")
+        stores = [Store(r[0], r[1], r[2], r[3]) for r in rows]
         bad = [s.store_id for s in stores if s.macro_region not in PARTITION]
         if not stores:
             raise RuntimeError("dim_store is empty: run src/sql/02_populate_dim_store.sql first.")

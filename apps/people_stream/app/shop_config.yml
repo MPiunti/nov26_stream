@@ -1,7 +1,7 @@
 # Store and simulation parameters of the people-stream app. See doc/people_stream.md, "Configuration".
 # Read once when the app starts: after a change, redeploy the app bundle (or restart the app).
-# Format: nested "key: value" lines, two-space indents, whole numbers (store_ids: a comma-separated
-# list of store ids), # comments.
+# Format: nested "key: value" lines, two-space indents, whole numbers (store_ids and
+# high_share_countries: a comma-separated list of ids), # comments.
 
 stores:
   opening_hour: 10          # stores open at 10:00 local time
@@ -21,6 +21,16 @@ flagships:                  # flagship stores: more traffic and the inverse clie
   store_ids: IT-MI-001, US-NY-001   # Milan Galleria Vittorio Emanuele, New York Fifth Avenue
   traffic_pct: 145          # entering people = 145% of the region's N_AVG_PEOPLE (+45%)
   local_share: 30           # percent of buyers from the store's country (70% visitors)
+
+cockpit:                    # start values of the cockpit switches under START/STOP; 1 = on, 0 = off
+  sales: 1                  # sales transactions: each person leaving buys with PURCHASE_PROB
+  ecommerce: 1              # e-commerce sales on top of the stores' sales (only while sales are on)
+
+ecommerce:                  # the ECOM stores (one per country): online sales only, no people counting
+  share_pct: 10             # ECOM sales as a percent of a country's total sales value (stores + ECOM)
+  high_share_pct: 15        # the same, in the countries listed below
+  high_share_countries: US, CN
+  price_pct: 90             # online price as a percent of list price: the average ECOM transaction is 10% lower
 
 n_avg_people:               # average visitors per store per simulated day, by macro region
   default:                  # slider start values and "Reset to defaults"

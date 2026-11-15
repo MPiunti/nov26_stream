@@ -19,7 +19,10 @@ DEFAULT_TABLES = {
 # Drill-down levels: the column each level groups by. Labels come from the dimension cache in the app.
 GEO_LEVELS = {"REGION": "d.macro_region", "COUNTRY": "d.country_code", "STORE": "d.store_id"}
 PRODUCT_LEVELS = {"CATEGORY": "s.category", "PRODUCT": "s.product_id"}
-STORE_TYPES = ("ALL", "FLAGSHIP", "OTHER")
+# Sales channel of the store (dim_store.channel). RETAIL and FLAGSHIP are physical stores, with people
+# counting; ECOM stores sell online only, so they have sales but no people events.
+CHANNELS = ("RETAIL", "FLAGSHIP", "ECOM")
+CHANNEL_LEVEL = "d.channel"  # the channel chart groups by it
 
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
@@ -46,14 +49,15 @@ class Filters:
     stores: tuple = ()      # dim_store.store_id
     categories: tuple = ()  # silver_sales_transactions.category
     products: tuple = ()    # silver_sales_transactions.product_id
-    store_type: str = "ALL"  # ALL, FLAGSHIP (the two flagships) or OTHER
+    channels: tuple = ()    # dim_store.channel: RETAIL, FLAGSHIP, ECOM
 
     def __post_init__(self):
         for d in self.dates:
             if not _DATE.fullmatch(d):
                 raise ValueError(f"bad date {d!r}")
-        if self.store_type not in STORE_TYPES:
-            raise ValueError(f"bad store type {self.store_type!r}")
+        for c in self.channels:
+            if c not in CHANNELS:
+                raise ValueError(f"bad channel {c!r}")
 
 
 def _in(column, name, values, params, cast=None):
@@ -71,13 +75,9 @@ def where(f, utc_column, sales=True):
     if f.dates:
         clauses.append(_in(f"CAST({utc_column} AS DATE)", "date", f.dates, params, cast="DATE"))
     for column, name, values in (("d.macro_region", "region", f.regions), ("d.country_code", "country", f.countries),
-                                 ("d.store_id", "store", f.stores)):
+                                 ("d.store_id", "store", f.stores), ("d.channel", "channel", f.channels)):
         if values:
             clauses.append(_in(column, name, values, params))
-    if f.store_type == "FLAGSHIP":
-        clauses.append("d.is_flagship")
-    elif f.store_type == "OTHER":
-        clauses.append("NOT d.is_flagship")
     if sales:
         if f.categories:
             clauses.append(_in("s.category", "category", f.categories, params))
@@ -94,7 +94,11 @@ def _people_from():
     return f"FROM {table('PEOPLE_TABLE')} s\nJOIN {table('STORE_TABLE')} d ON s.store_id = d.store_id"
 
 
-SALES_MEASURES = "SUM(s.amount) AS value, SUM(s.quantity) AS quantity, COUNT(*) AS transactions"
+# store_quantity: the items sold in physical stores, the ones the people counters can be compared with.
+# transactions: baskets, so distinct transaction ids (a transaction has one row per item). Every line of a
+# basket has the same store, time and channel, so the counts add up across hours, regions and channels.
+SALES_MEASURES = ("SUM(s.amount) AS value, SUM(s.quantity) AS quantity, COUNT(DISTINCT s.transaction_id) AS transactions, "
+                  "SUM(CASE WHEN d.channel <> 'ECOM' THEN s.quantity ELSE 0 END) AS store_quantity")
 PEOPLE_MEASURES = ("SUM(CASE WHEN s.event_type = 'ENTRY' THEN s.people_count ELSE 0 END) AS people_in, "
                    "SUM(CASE WHEN s.event_type = 'EXIT' THEN s.people_count ELSE 0 END) AS people_out")
 
@@ -121,8 +125,8 @@ def people_trend_sql(f):
 
 
 def sales_breakdown_sql(f, column):
-    """Sales per member of a drill level (GEO_LEVELS or PRODUCT_LEVELS column) and GMT date."""
-    if column not in GEO_LEVELS.values() and column not in PRODUCT_LEVELS.values():
+    """Sales per member of a drill level (GEO_LEVELS, PRODUCT_LEVELS or the channel) and GMT date."""
+    if column not in (*GEO_LEVELS.values(), *PRODUCT_LEVELS.values(), CHANNEL_LEVEL):
         raise ValueError(f"bad level column {column!r}")
     clause, params = where(f, SALES_UTC)
     sql = f"""SELECT {column} AS member, CAST({SALES_UTC} AS DATE) AS utc_date,
@@ -134,8 +138,8 @@ GROUP BY 1, 2"""
 
 
 def people_breakdown_sql(f, column):
-    """People per geography member and GMT date."""
-    if column not in GEO_LEVELS.values():
+    """People per geography member or channel and GMT date. E-commerce stores have no people events."""
+    if column not in (*GEO_LEVELS.values(), CHANNEL_LEVEL):
         raise ValueError(f"bad level column {column!r}")
     clause, params = where(f, PEOPLE_UTC, sales=False)
     sql = f"""SELECT {column} AS member, CAST({PEOPLE_UTC} AS DATE) AS utc_date,
@@ -163,7 +167,7 @@ GROUP BY 1, 2"""
 
 
 def stores_sql():
-    return (f"SELECT store_id, store_name, country_code, country_name, macro_region, is_flagship "
+    return (f"SELECT store_id, store_name, country_code, country_name, macro_region, is_flagship, channel "
             f"FROM {table('STORE_TABLE')} WHERE is_active ORDER BY store_id"), {}
 
 

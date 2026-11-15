@@ -134,6 +134,64 @@ class StoreDimensionTests(unittest.TestCase):
         self.assertIn(f"**All** | 13 countries, 28 cities | **{total}**", doc)
 
 
+def _ecom_stores():
+    """(country_code, country_name, timezone) of the e-commerce stores in 02_populate_dim_store.sql."""
+    sql = read_text(*POPULATE_SQL).split("ecom_stores AS (", 1)[1].split("AS e (", 1)[0]
+    return re.findall(r"\('(\w\w)', '([^']*)', '([\w/]+)'\)", sql)
+
+
+class ChannelTests(unittest.TestCase):
+    """Sales channels of dim_store: RETAIL and FLAGSHIP (physical, people counting) and ECOM (online)."""
+
+    def test_one_ecom_store_per_country_in_its_main_time_zone(self):
+        ecom = _ecom_stores()
+        countries = [c for c, *_ in _allocation()]
+        self.assertEqual([c for c, *_ in ecom], list(dict.fromkeys(countries)), "one per country, same order")
+        first_zone = {}
+        for c, _, _, tz, _ in _allocation():
+            first_zone.setdefault(c, tz)
+        self.assertEqual({c: tz for c, _, tz in ecom}, first_zone, "the country's first (main) time zone")
+        self.assertEqual(len(ecom), 13)
+        self.assertIn("CONCAT(country_code, '-EC-001') AS store_id", read_text(*POPULATE_SQL))
+
+    def test_channel_is_derived_the_same_way_everywhere(self):
+        populate = read_text(*POPULATE_SQL)
+        self.assertIn("""WHEN store_id LIKE '%-EC-001' THEN 'ECOM'
+            WHEN is_flagship THEN 'FLAGSHIP'
+            ELSE 'RETAIL'
+        END AS channel""", populate)
+        for text in ("target.channel <=> source.channel", "target.channel = source.channel", "source.channel,"):
+            self.assertIn(text, populate)
+        self.assertIn("channel STRING", read_text("src", "sql", "01_create_dim_store.sql"))
+        migration = read_text("src", "sql", "16_add_store_channel.sql")
+        self.assertIn("ALTER TABLE workspace.test02_warehouse.dim_store\nADD COLUMN channel STRING", migration)
+
+    def test_validation_expects_the_channels(self):
+        validate = read_text("src", "sql", "03_validate_dim_store.sql")
+        physical = sum(n for *_, n in _allocation())
+        flagships = 2
+        expected = {"RETAIL": physical - flagships, "FLAGSHIP": flagships, "ECOM": len(_ecom_stores())}
+        found = {c: int(n) for c, n in re.findall(r"\('(RETAIL|FLAGSHIP|ECOM)', (\d+)\)", validate)}
+        self.assertEqual(found, expected)
+        self.assertIn(f"{physical + expected['ECOM']} AS expected_value", validate)
+        self.assertEqual(validate.count("WHERE channel <> 'ECOM'"), 2, "country and region counts: physical stores")
+        for check in ("INVALID_CHANNEL", "COUNTRIES_WITHOUT_ONE_ECOM_STORE"):
+            self.assertIn(f"'{check}'", validate)
+
+    def test_clients_are_counted_on_physical_stores_only(self):
+        """500 clients per physical store: the ECOM stores mustn't add 6,500 clients."""
+        for f in ("09_populate_dim_client.sql", "13_validate_dim_client_product.sql"):
+            sql = read_text("src", "sql", f)
+            self.assertRegex(sql, r"COUNT\(\*\) \* 500 AS \w+\s+FROM workspace\.test02_warehouse\.dim_store\s+"
+                                  r"WHERE channel <> 'ECOM'", f)
+
+    def test_doc_describes_the_channels(self):
+        doc = read_text(*DOC)
+        for text in ("### 2.6 Sales channels", "| `RETAIL` | 198 |", "| `FLAGSHIP` | 2 |", "| `ECOM` | 13 |",
+                     "`<country>-EC-001`", "no people counting"):
+            self.assertIn(text, doc)
+
+
 class PeopleFlowTests(unittest.TestCase):
 
     def test_volume_parameters_documented(self):
