@@ -7,15 +7,17 @@ Times are GMT (UTC). Layout and sizes: assets/dashboard.css. See doc/sales_dashb
 """
 import os
 import threading
+import time
 from datetime import datetime, timezone
 
 import dash_bootstrap_components as dbc
-from dash import Dash, Input, Output, State, ctx, dash_table, dcc, html, no_update
+from dash import ALL, Dash, Input, Output, State, ctx, dash_table, dcc, html, no_update
 from dash.dash_table.Format import Format, Group, Scheme, Symbol
 
 import bi
 import dashboard_sql as q
 import figures
+import genie_chat
 import sql_warehouse
 
 REFRESH_SECONDS = max(2, int(os.environ.get("REFRESH_SECONDS", "5")))
@@ -236,6 +238,83 @@ def _plain(rows):
     return [{k: (float(v) if v is not None and not isinstance(v, str) else v) for k, v in r.items()} for r in rows]
 
 
+# ------------------------------------------------------------------ Ask Genie tab (the Genie agent)
+
+GENIE_POLL_MS = 2000  # how often the tab asks Genie whether the answer is ready
+_genie = None
+
+
+def genie():
+    """The Genie client, created on first use: the app's service principal, through the Databricks SDK."""
+    global _genie
+    if _genie is None:
+        from databricks.sdk import WorkspaceClient
+        w = WorkspaceClient()
+        _genie = genie_chat.GenieClient(os.environ.get("GENIE_SPACE_ID", ""),
+                                        lambda method, p, body=None: w.api_client.do(method, p, body=body))
+    return _genie
+
+
+def genie_tab():
+    """A chat with the Genie agent Retail KPI Assistant, on the KPI metric views."""
+    return html.Div([
+        html.Div([
+            html.Div([html.Span("Ask Genie", className="panel-title me-2"),
+                      html.Span("Retail KPI Assistant · answers in plain language from the KPI metric views, for the "
+                                "current simulation unless you ask otherwise", className="tiny text-muted")]),
+            dbc.Button("New conversation", id="genie-new", color="secondary", outline=True, size="sm"),
+        ], className="d-flex justify-content-between align-items-center flex-wrap gap-1 mb-2"),
+        html.Div([dbc.Button(q, id={"type": "genie-sample", "index": i}, color="light", size="sm",
+                             className="genie-chip me-1 mb-1") for i, q in enumerate(genie_chat.SAMPLE_QUESTIONS)],
+                 className="mb-2"),
+        panel(html.Div(id="genie-chat", className="genie-chat"), marginBottom="8px"),
+        dbc.InputGroup([
+            dbc.Input(id="genie-question", placeholder="Ask about clients, stores and KPIs, e.g. Which store has the "
+                                                       "best conversion?", debounce=False, n_submit=0),
+            dbc.Button("Ask", id="genie-ask", color="dark"),
+        ], size="sm"),
+        dcc.Store(id="genie-history", data=[]),     # the chat: questions and answers
+        dcc.Store(id="genie-conversation"),         # the Genie conversation id, for follow-ups
+        dcc.Store(id="genie-pending"),              # the message Genie is still working on
+        dcc.Interval(id="genie-poll", interval=GENIE_POLL_MS, disabled=True),
+    ], className="pt-2")
+
+
+def genie_bubble(item, index):
+    """One chat entry: the question, or Genie's answer with its table, its SQL and suggested follow-ups."""
+    if item["role"] == "user":
+        return html.Div(item["text"], className="genie-user")
+    status = item.get("status", "")
+    if status not in genie_chat.TERMINAL:
+        return html.Div([dbc.Spinner(size="sm", spinner_class_name="me-2"),
+                         genie_chat.STATUS_TEXT.get(status, "Working") + "…"], className="genie-bot text-muted")
+    parts = []
+    if item.get("error"):
+        parts.append(html.Div(f"Genie couldn't answer: {item['error'][:300]}", className="text-danger"))
+    if item.get("text"):
+        parts.append(dcc.Markdown(item["text"], className="genie-text"))
+    elif item.get("description"):
+        parts.append(html.Div(item["description"]))
+    if item.get("columns"):
+        parts.append(dash_table.DataTable(
+            data=item["rows"], columns=[{"id": c, "name": c} for c in item["columns"]], page_action="none",
+            style_table={"overflowX": "auto", "maxHeight": "260px", "overflowY": "auto"}, style_as_list_view=True,
+            style_header={"fontWeight": "600", "fontSize": "10px", "backgroundColor": "#f2f2f2"},
+            style_cell={"fontSize": "11px", "padding": "2px 6px", "border": "none",
+                        "borderBottom": "1px solid #ececec", "backgroundColor": "transparent",
+                        "fontFamily": "Segoe UI, Helvetica, Arial, sans-serif", "textAlign": "left"}))
+        if item.get("total", 0) > len(item["rows"]):
+            parts.append(html.Div(f"First {len(item['rows'])} of {item['total']:,} rows", className="tiny text-muted"))
+    if item.get("sql"):
+        parts.append(html.Details([html.Summary("Show the SQL", className="tiny text-muted"),
+                                   html.Pre(item["sql"], className="genie-sql")]))
+    if item.get("suggested"):
+        parts.append(html.Div([dbc.Button(q, id={"type": "genie-follow", "index": index * 10 + i}, color="light",
+                                          size="sm", className="genie-chip me-1 mt-1")
+                               for i, q in enumerate(item["suggested"][:3])]))
+    return html.Div(parts, className="genie-bot")
+
+
 def sales_page():
     """The Sales performance tab: KPI cards, trend, channel, geography and product breakdowns."""
     return html.Div([
@@ -266,6 +345,7 @@ app.layout = html.Div([
             dbc.Tabs(id="page-tab", active_tab="tab-sales", className="mb-2", children=[
                 dbc.Tab(label="Sales performance", tab_id="tab-sales", children=sales_page()),
                 dbc.Tab(label="Clienteling", tab_id="tab-clienteling", children=clienteling_tab()),
+                dbc.Tab(label="Ask Genie", tab_id="tab-genie", children=genie_tab()),
             ]),
             footer(),
         ], xs=12, md=9, xl=10),
@@ -558,6 +638,81 @@ def clienteling(_done, tab, simulation, dates, regions, countries, stores, chann
     subtitle = (f"simulation {simulation} · metric views client_metrics and store_metrics · "
                 + ("category filter applies to clients only" if f.categories else "all filters of the page apply"))
     return cards + [_plain(res["stores"]), _plain(res["clients"]), subtitle, None]
+
+
+@app.callback(
+    Output("genie-history", "data"), Output("genie-conversation", "data"), Output("genie-pending", "data"),
+    Output("genie-poll", "disabled"), Output("genie-question", "value"),
+    Input("genie-ask", "n_clicks"), Input("genie-question", "n_submit"), Input("genie-new", "n_clicks"),
+    Input({"type": "genie-sample", "index": ALL}, "n_clicks"), Input({"type": "genie-follow", "index": ALL}, "n_clicks"),
+    State("genie-question", "value"), State("genie-history", "data"), State("genie-conversation", "data"),
+    State("genie-pending", "data"),
+    prevent_initial_call=True,
+)
+def genie_ask(_ask, _submit, _new, samples, follows, question, history, conversation, pending):
+    """Send a question (typed, a sample or a suggested follow-up) to Genie; or start a new conversation."""
+    trigger = ctx.triggered_id
+    if trigger == "genie-new":
+        return [], None, None, True, ""
+    if isinstance(trigger, dict):  # a sample or follow-up button; ignore the buttons' creation (n_clicks None)
+        if not ctx.triggered or not ctx.triggered[0]["value"]:
+            return (no_update,) * 5
+        if trigger["type"] == "genie-sample":
+            question = genie_chat.SAMPLE_QUESTIONS[trigger["index"]]
+        else:
+            item = (history or [])[trigger["index"] // 10] if (history or []) else {}
+            suggested = item.get("suggested") or []
+            question = suggested[trigger["index"] % 10] if trigger["index"] % 10 < len(suggested) else ""
+    question = (question or "").strip()
+    if not question or pending:  # nothing to ask, or Genie is still answering the previous question
+        return (no_update,) * 5
+    history = list(history or []) + [{"role": "user", "text": question}]
+    try:
+        conversation, message = genie().ask(question, conversation)
+    except Exception as exc:  # shown in the chat
+        return history + [{"role": "genie", "status": "FAILED", "error": f"{type(exc).__name__}: {exc}"}], \
+            conversation, None, True, ""
+    history.append({"role": "genie", "status": "SUBMITTED"})
+    return history, conversation, {"conversation_id": conversation, "message_id": message, "started": time.time()}, \
+        False, ""
+
+
+@app.callback(
+    Output("genie-history", "data", allow_duplicate=True), Output("genie-pending", "data", allow_duplicate=True),
+    Output("genie-poll", "disabled", allow_duplicate=True),
+    Input("genie-poll", "n_intervals"), State("genie-pending", "data"), State("genie-history", "data"),
+    prevent_initial_call=True,
+)
+def genie_poll(_n, pending, history):
+    """While Genie works: show its progress; when it's done, fetch the answer, its rows and its SQL."""
+    if not pending or not history:
+        return no_update, None, True
+    history = list(history)
+    try:
+        answer = genie_chat.parse_message(genie().message(pending["conversation_id"], pending["message_id"]))
+        if answer["status"] not in genie_chat.TERMINAL:
+            if time.time() - pending["started"] > genie_chat.TIMEOUT_SECONDS:
+                history[-1] = {"role": "genie", "status": "FAILED", "error": "no answer within 3 minutes; try again"}
+                return history, None, True
+            history[-1] = {"role": "genie", "status": answer["status"]}
+            return history, no_update, False
+        columns, rows, total = [], [], 0
+        if answer["status"] == "COMPLETED" and answer["attachment_id"]:
+            columns, rows, total = genie_chat.result_table(genie().query_result(
+                pending["conversation_id"], pending["message_id"], answer["attachment_id"]))
+        history[-1] = {"role": "genie", **answer, "columns": columns, "rows": rows, "total": total}
+    except Exception as exc:  # shown in the chat
+        history[-1] = {"role": "genie", "status": "FAILED", "error": f"{type(exc).__name__}: {exc}"}
+    return history, None, True
+
+
+@app.callback(Output("genie-chat", "children"), Input("genie-history", "data"))
+def genie_render(history):
+    if not history:
+        return html.Div("Ask a question, or pick one above. Genie answers from the KPI definitions of "
+                        "doc/kpi_glossary.md and shows the data and the SQL behind each answer.",
+                        className="tiny text-muted")
+    return [genie_bubble(item, i) for i, item in enumerate(history)]
 
 
 if __name__ == "__main__":

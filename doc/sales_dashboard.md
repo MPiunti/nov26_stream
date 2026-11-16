@@ -8,7 +8,7 @@ The dashboard is the **BI engine** of the solution; how it stays decoupled from 
 
 ## 1. Purpose and boundaries
 
-**Two tabs:** **Sales performance** (§2 to §6) and **Clienteling** (§8), the client and store KPIs from the Unity Catalog metric views in `test02_metric`. The filter area and the footer are shared by both.
+**Three tabs:** **Sales performance** (§2 to §6); **Clienteling** (§8), the client and store KPIs from the Unity Catalog metric views in `test02_metric`; and **Ask Genie** (§9), a chat with the Genie agent on the same KPIs. The filter area and the footer are shared by all three.
 
 | | |
 |---|---|
@@ -119,7 +119,7 @@ All in `app/dashboard_sql.py`:
 | Before the first deploy | Deploy the pipeline bundle and run the pipeline at least once, then run `src/sql/15_create_current_simulation_views.sql`, so the views `current_sales_transactions` and `current_people_counter_events` exist, and run the job `retail-metric-views`, so the metric views `client_metrics` and `store_metrics` exist (the app's permissions are granted on all four). The dimensions come from `src/sql/01_…`, `02_…`, `10_…`, `11_…` |
 | Check | `databricks bundle validate --strict -t dev --profile MPiunti`, from `apps/sales_dashboard/` |
 | Deploy | From `apps/sales_dashboard/`: `databricks bundle deploy -t dev --profile MPiunti`, then `databricks bundle run sales_dashboard -t dev --profile MPiunti` to start the app; or, in the workspace Git folder, open `apps/sales_dashboard/` and use **Deployments** |
-| Granted to the app | `CAN_USE` on the SQL warehouse; `SELECT` on the views `test02_streaming.current_sales_transactions` and `current_people_counter_events`, on the metric views `test02_metric.client_metrics` and `store_metrics`, and on `test02_warehouse.dim_store` and `dim_product`. Nothing else: no access to the silver tables themselves |
+| Granted to the app | `CAN_USE` on the SQL warehouse; `SELECT` on the views `test02_streaming.current_sales_transactions` and `current_people_counter_events`, on the metric views `test02_metric.client_metrics` and `store_metrics`, on `test02_streaming.current_simulation`, and on `test02_warehouse.dim_store`, `dim_client` and `dim_product`; `CAN_RUN` on the Genie agent Retail KPI Assistant. Nothing else: no access to the silver tables themselves |
 | Stop paying for it | Stop the app under **Compute → Apps**. While open, the page queries the SQL warehouse every 5 seconds, which keeps the warehouse running; switch **Live** off or close the page when you're done |
 
 The pipeline bundle doesn't upload `apps/` (`sync.exclude` in the root `databricks.yml`), and each app bundle has its own state, so deploying one never changes the others.
@@ -139,3 +139,19 @@ Client and store KPIs, read from the Unity Catalog metric views `client_metrics`
 - **Filters:** the page's dates, regions, countries, stores and channels apply to both metric views; the category filter applies to the clients only (traffic isn't per category); the product filter doesn't apply here.
 - **Refresh:** the tab's three queries run after every refresh of the page, so with the same filters and the same 5-second cadence, and **only while the tab is open**: on the Sales performance tab they don't run at all.
 - **Queries:** `SELECT … MEASURE(\`Revenue\`) …` on the metric views, with `GROUP BY ALL`; filter values as named parameters, never pasted into the SQL (`dashboard_sql.py`).
+
+## 9. Ask Genie tab
+
+A chat with the Genie agent **Retail KPI Assistant** ([`kpi_genie.md`](kpi_genie.md)): questions in plain language on the client and store KPIs, answered from the metric views, for the current simulation unless the question says otherwise.
+
+| Area | Content |
+|---|---|
+| **Sample questions** | The agent's five sample questions, as buttons: a click asks it |
+| **Chat** | The questions, and Genie's answers: its text, the result table (first 50 rows, numbers with thousands separators), **Show the SQL** (folded, for whoever wants to check), and up to three suggested follow-up questions, as buttons |
+| **Question box** | Type a question and press Enter or **Ask**. A question continues the conversation, so "and by region?" works; **New conversation** starts afresh |
+
+- **How it works:** the app calls the Genie Conversation API as its service principal (`genie_chat.py`): it starts a conversation, then asks every 2 seconds whether the answer is ready, showing Genie's progress ("Reading the KPI definitions", "Waking up the SQL warehouse", "Running the query"...), and fetches the result rows when it is. Genie answers in about 10 to 60 seconds; after 3 minutes the tab gives up and says so.
+- **One question at a time:** while Genie is answering, another question is ignored.
+- **Same definitions everywhere:** Genie reads the KPIs from the metric views, whose descriptions are the glossary ([`kpi_glossary.md`](kpi_glossary.md)), so its numbers and definitions match the Clienteling tab's.
+- **Permissions:** `CAN_RUN` on the agent (the app's `genie-space` resource), and `SELECT` on the seven sources the agent reads, including `dim_client` and the `current_simulation` view behind its "current simulation" filter. The agent's id comes from the bundle variable `genie_space_id`, set to the agent the job `deploy-kpi-genie` created; redeploying the agent updates it in place, so the id doesn't change.
+- **Checked on 16 November 2026** against the live agent: "What is the conversion rate by channel?" answered 18.4% for retail and 17.4% for the flagships, not applicable for e-commerce, with its SQL on `store_metrics` and three suggested follow-ups.

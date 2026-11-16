@@ -32,7 +32,7 @@ The three parts are **decoupled**: each can be started, stopped, redeployed or r
 |---|---|---|---|
 | **Simulation engine** | The people-stream app | Generates people-counter events for the 200 physical stores, the sales they lead to, and the online sales of the 13 e-commerce stores, and writes them to two source tables, as an event broker would deliver them | [`people_stream.md`](people_stream.md), [`sales.md`](sales.md) |
 | **Data pipeline** | A streaming pipeline kept running by a continuous job | Bronze keeps every message as received; silver keeps the parsed, typed, valid ones; quarantine keeps the invalid ones with the reason | [`readme.md`](../readme.md), [`warehouse.md`](warehouse.md) |
-| **Genie agent** | Retail KPI Assistant | Answers executives' questions in natural language on the KPIs of the metric views, and explains each KPI's definition | [`kpi_genie.md`](kpi_genie.md) |
+| **Genie agent** | Retail KPI Assistant | Answers executives' questions in natural language on the KPIs of the metric views, and explains each KPI's definition; available under Genie and in the dashboard's Ask Genie tab | [`kpi_genie.md`](kpi_genie.md) |
 | **BI engine** | The sales dashboard app | Self-service sales and footfall analysis, refreshed every 5 seconds, with filters and drill-down | [`sales_dashboard.md`](sales_dashboard.md) |
 
 ## 3. How the engines are decoupled

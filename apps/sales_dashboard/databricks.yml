@@ -17,6 +17,9 @@ variables:
   metric_schema:
     description: Metric schema of the KPIs the Clienteling tab reads (client_metrics, store_metrics)
     default: test02_metric
+  genie_space_id:
+    description: "Genie agent Retail KPI Assistant, for the Ask Genie tab: created by the job deploy-kpi-genie of agents/kpi_genie (doc/kpi_genie.md)"
+    default: 01f1e20621521f5e8bb8fb0c99384944
   warehouse_schema:
     description: Data warehouse schema of the dimensions the app reads (dim_store, dim_product)
     default: test02_warehouse

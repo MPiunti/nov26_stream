@@ -200,6 +200,84 @@ class ClientelingTests(unittest.TestCase):
             self.assertIn(text, doc)
 
 
+class GenieTabTests(unittest.TestCase):
+    """The Ask Genie tab: a chat with the Genie agent (genie_chat.py, doc/sales_dashboard.md section 9)."""
+
+    MSG = {"status": "COMPLETED", "attachments": [
+        {"attachment_id": "a1", "query": {"query": "SELECT 1", "description": "Conversion by channel"}},
+        {"attachment_id": "a2", "suggested_questions": {"questions": ["Revenue by channel?", "Basket by channel?"]}},
+        {"text": {"content": "Conversion is **18.4%** in retail."}},
+        {"attachment_id": "a3", "viz": {}}]}
+
+    def setUp(self):
+        import genie_chat
+        self.g = genie_chat
+        self.calls = []
+
+    def _do(self, method, path, body=None):
+        self.calls.append((method, path, body))
+        return {"conversation_id": "c1", "message_id": "m1"} if path.endswith("start-conversation") else {"id": "m2"}
+
+    def test_new_conversation_then_follow_ups(self):
+        client = self.g.GenieClient("space1", self._do)
+        self.assertEqual(client.ask("  Top stores?  "), ("c1", "m1"))
+        self.assertEqual(self.calls[-1], ("POST", "/api/2.0/genie/spaces/space1/start-conversation",
+                                          {"content": "Top stores?"}))
+        self.assertEqual(client.ask("And by region?", "c1"), ("c1", "m2"))
+        self.assertEqual(self.calls[-1][:2], ("POST", "/api/2.0/genie/spaces/space1/conversations/c1/messages"))
+        self.assertEqual(client.message("c1", "m2"), {"id": "m2"})
+        self.assertEqual(self.calls[-1][:2], ("GET", "/api/2.0/genie/spaces/space1/conversations/c1/messages/m2"))
+        client.query_result("c1", "m2", "a1")
+        self.assertTrue(self.calls[-1][1].endswith("/messages/m2/attachments/a1/query-result"))
+        with self.assertRaises(ValueError):
+            client.ask("   ")
+        with self.assertRaises(ValueError):
+            self.g.GenieClient("", self._do)
+
+    def test_parse_message(self):
+        p = self.g.parse_message(self.MSG)
+        self.assertEqual((p["status"], p["sql"], p["description"], p["attachment_id"]),
+                         ("COMPLETED", "SELECT 1", "Conversion by channel", "a1"))
+        self.assertEqual(p["text"], "Conversion is **18.4%** in retail.")
+        self.assertEqual(p["suggested"], ["Revenue by channel?", "Basket by channel?"])
+        failed = self.g.parse_message({"status": "FAILED", "error": {"error": "[INSUFFICIENT_PERMISSIONS] x"}})
+        self.assertEqual(failed["error"], "[INSUFFICIENT_PERMISSIONS] x")
+
+    def test_result_table_formats_for_executives(self):
+        result = {"statement_response": {"manifest": {"schema": {"columns": [{"name": "Channel"}, {"name": "conv"},
+                                                                               {"name": "out"}, {"name": "rev"}]}},
+                                         "result": {"data_array": [["RETAIL", "0.18431", "266836", "1234567.891"],
+                                                                   ["ECOM", None, "0", "8405981.1"]]}}}
+        columns, rows, total = self.g.result_table(result)
+        self.assertEqual(columns, ["Channel", "conv", "out", "rev"])
+        self.assertEqual(rows[0], {"Channel": "RETAIL", "conv": "0.1843", "out": "266,836", "rev": "1,234,567.89"})
+        self.assertEqual(rows[1]["conv"], "")
+        self.assertEqual(total, 2)
+        self.assertEqual(len(self.g.result_table(result, max_rows=1)[1]), 1)
+
+    def test_sample_questions_are_the_agents(self):
+        import json
+        agent = json.loads(read_text("agents", "kpi_genie", "src", "kpi_genie.json"))
+        self.assertEqual(sorted(self.g.SAMPLE_QUESTIONS),
+                         sorted(q["question"][0] for q in agent["serialized_space"]["config"]["sample_questions"]))
+
+    def test_tab_wiring(self):
+        code = read_text(*APP, "app", "app.py")
+        for text in ('dbc.Tab(label="Ask Genie", tab_id="tab-genie", children=genie_tab())',
+                     'os.environ.get("GENIE_SPACE_ID", "")', "w.api_client.do(method, p, body=body)",
+                     'Output("genie-history", "data", allow_duplicate=True)',
+                     "if not question or pending:", "genie_chat.TIMEOUT_SECONDS",
+                     'html.Summary("Show the SQL"'):
+            self.assertIn(text, code)
+        self.assertIn("valueFrom: genie-space", read_text(*APP, "app", "app.yaml"))
+        self.assertEqual(self.g.TERMINAL, ("COMPLETED", "FAILED", "CANCELLED"))
+
+    def test_doc_describes_the_tab(self):
+        doc = read_text("doc", "sales_dashboard.md")
+        for text in ("## 9. Ask Genie tab", "**Retail KPI Assistant**", "Show the SQL", "`CAN_RUN`"):
+            self.assertIn(text, doc)
+
+
 class KpiTests(unittest.TestCase):
 
     def test_totals(self):
@@ -482,7 +560,11 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(sorted(grants), [
             ("metric_schema", "client_metrics", "SELECT"), ("metric_schema", "store_metrics", "SELECT"),
             ("schema", "current_people_counter_events", "SELECT"), ("schema", "current_sales_transactions", "SELECT"),
-            ("warehouse_schema", "dim_product", "SELECT"), ("warehouse_schema", "dim_store", "SELECT")])
+            ("schema", "current_simulation", "SELECT"),
+            ("warehouse_schema", "dim_client", "SELECT"), ("warehouse_schema", "dim_product", "SELECT"),
+            ("warehouse_schema", "dim_store", "SELECT")])
+        self.assertIn("genie_space:\n            name: Retail KPI Assistant\n            space_id: ${var.genie_space_id}\n"
+                      "            permission: CAN_RUN", res, "run the Genie agent, nothing more")
         self.assertNotIn("MODIFY", res)
         self.assertIn("permission: CAN_USE", res)
 

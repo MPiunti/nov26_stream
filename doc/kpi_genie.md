@@ -10,6 +10,7 @@ Reference for the Genie agent that answers questions in natural language on the 
 | **Audience** | Business executives: plain business language, SQL only when asked |
 | **Default scope** | The **current simulation** (the latest `simulation_id`), unless the user names another one or asks for all simulations |
 | **What it doesn't do** | Write anything: Genie only reads, with the permissions of the user who asks |
+| **Where to use it** | In the workspace under **Genie**, or in the sales dashboard's **Ask Genie** tab ([`sales_dashboard.md`](sales_dashboard.md) §9), where the app asks it as its service principal |
 | **Bundle** | `agents/kpi_genie/`, bundle `retail_kpi_genie_bundle`. Separate from the pipeline bundle and the two app bundles: deployed and run on its own |
 | **Agent** | **Retail KPI Assistant**, a Genie space in `/Workspace/Users/<user>/genie`, under **Genie** in the workspace |
 | **Code** | `agents/kpi_genie/src/kpi_genie.json` (the definition), `agents/kpi_genie/src/deploy_genie.py` (creates or updates the agent from it) |

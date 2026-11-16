@@ -18,6 +18,9 @@ env:
     value: workspace.test02_metric.client_metrics
   - name: STORE_METRICS
     value: workspace.test02_metric.store_metrics
+  # Ask Genie tab: the Genie agent's id, injected from the app's genie-space resource.
+  - name: GENIE_SPACE_ID
+    valueFrom: genie-space
   # Seconds between two refreshes of the screen (at least 2). See doc/sales_dashboard.md, "Freshness".
   - name: REFRESH_SECONDS
     value: "5"

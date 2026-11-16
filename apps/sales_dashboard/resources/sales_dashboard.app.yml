@@ -44,3 +44,19 @@ resources:
             securable_full_name: ${var.catalog}.${var.metric_schema}.store_metrics
             securable_type: TABLE
             permission: SELECT
+        # Ask Genie tab: run the Genie agent, and read the two sources it uses that the other tabs don't.
+        - name: genie-space
+          genie_space:
+            name: Retail KPI Assistant
+            space_id: ${var.genie_space_id}
+            permission: CAN_RUN
+        - name: client-table
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.warehouse_schema}.dim_client
+            securable_type: TABLE
+            permission: SELECT
+        - name: current-simulation
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.schema}.current_simulation
+            securable_type: TABLE
+            permission: SELECT
