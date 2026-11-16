@@ -4,7 +4,7 @@ Reference for the project's business KPIs: how they are defined, where they live
 
 The data underneath is described in [`sales.md`](sales.md) (transactions, baskets, channels), [`dataset.md`](dataset.md) (stores), [`client.md`](client.md) and [`product.md`](product.md); schemas and keys in [`warehouse.md`](warehouse.md); the whole solution in [`architecture.md`](architecture.md).
 
-**Status (16 November 2026):** the KPI list is approved (§6), and the two metric views are live in `workspace.test02_metric` (§8), checked against plain SQL on silver. Their functional definitions are in [`kpi_glossary.md`](kpi_glossary.md). Next: the dashboard's Clienteling tab.
+**Status (16 November 2026):** the KPI list is approved (§6), and the two metric views are live in `workspace.test02_metric` (§8), checked against plain SQL on silver. Their functional definitions are in [`kpi_glossary.md`](kpi_glossary.md). The sales dashboard's **Clienteling** tab reads them ([`sales_dashboard.md`](sales_dashboard.md) §8).
 
 ## 1. The decision: metric views
 
@@ -92,30 +92,38 @@ Agreed with the owner on 16 November 2026, one by one. The functional descriptio
 | Items per basket | Items per purchase | `SUM(quantity)` / transactions | Approved |
 | Distinct clients | Different clients who bought | `COUNT(DISTINCT client_id)` by store | Approved |
 | Visitor share | Part of the revenue from clients registered in another country | Revenue from non-local clients / revenue | Approved |
-| Conversion | Buyers per person leaving the store; physical stores only | Store transactions / people out, from two metric views | Approved: second metric view on the people events |
+| Conversion | Buyers per person leaving the store; physical stores only | Store transactions / people out, in `store_metrics` | Approved |
 
-**Conversion** combines sales with people counts, a different fact table at a different grain. Decided: each fact keeps its own metric view (`sales_metrics`, `people_metrics`), with the same store and time dimensions, and the dashboard divides the two for the same slice.
+**Conversion** combines sales with people counts, a different fact table at a different grain. Decided: `store_metrics` puts both facts on one timeline (its source is the sales lines and the door events, each with store, simulation and GMT time), so Conversion is a measure of its own, correct for any store, channel, region, date or hour. This replaces the first idea of a separate traffic metric view divided by the dashboard.
 
-## 7. Next steps
+## 7. Consumers
 
-1. Grant `SELECT` on the two metric views to the sales dashboard (in its bundle's resources) and build the **Clienteling** tab on them ([`sales_dashboard.md`](sales_dashboard.md)).
+| Consumer | Reads | Granted by |
+|---|---|---|
+| Sales dashboard, **Clienteling** tab ([`sales_dashboard.md`](sales_dashboard.md) §8) | `client_metrics` and `store_metrics`: cards, top stores, top clients, for the current simulation | `SELECT` in the app's bundle resources (`apps/sales_dashboard/resources/sales_dashboard.app.yml`), granted on deploy |
+
+Next candidates: AI/BI dashboards and a Genie space on the same metric views, with the same definitions.
 
 ## 8. The metric views
 
+One metric view per main entity:
+
 | Metric view | Over | Holds | Definition |
 |---|---|---|---|
-| `workspace.test02_metric.sales_metrics` | `silver_sales_transactions`, joined to `dim_store`, `dim_client`, `dim_product` | The client and store KPIs: 12 measures, 17 dimensions | `src/metrics/sales_metrics.sql` |
-| `workspace.test02_metric.people_metrics` | `silver_people_counter_events`, joined to `dim_store` | People in and out: 2 measures, 8 dimensions | `src/metrics/people_metrics.sql` |
+| `workspace.test02_metric.client_metrics` | `silver_sales_transactions`, joined to `dim_client`, `dim_store`, `dim_product` | The client KPIs: Total Spent, Transactions, Items, Average Basket, Stores Visited, Online Spent and Share. 7 measures, 13 dimensions | `src/metrics/client_metrics.sql` |
+| `workspace.test02_metric.store_metrics` | A query on `silver_sales_transactions` and `silver_people_counter_events`, with the store and client attributes | The store KPIs: Revenue, Transactions, Items, Average Basket, Items per Basket, Distinct Clients, Visitor Revenue and Share, Store Transactions, People In, People Out, Conversion. 12 measures, 10 dimensions | `src/metrics/store_metrics.sql` |
+
+Ratios use `try_divide`, so a slice with nothing to divide by (e-commerce has no people, a store with traffic has no sale yet) shows empty instead of failing. Filtered sums return 0 when nothing matches.
 
 **Deployment:** the job `retail-metric-views` of the pipeline bundle (`resources/modeling.metrics.job.yml`) runs both files on the SQL warehouse; run it after every change to a definition. Each file creates its metric view if missing (`CREATE VIEW IF NOT EXISTS`), then sets the definition with `ALTER VIEW … AS`. Checked on the workspace: `ALTER` keeps the grants, where `CREATE OR REPLACE` would drop them.
 
-**Checked on 16 November 2026**, for the latest simulation, against the same calculations written directly on silver: revenue, transactions, items, average basket, items per basket, distinct clients, online and visitor share, store transactions by channel, and people in and out by channel, all identical. Per client (top spenders) the total spent, transactions, items, average basket, stores visited and online share work as expected. Filtered measures return 0, not empty, when nothing matches (e.g. the online share of a flagship).
+**Checked on 16 November 2026**, for the latest simulation, against the same calculations written directly on silver: by channel, revenue, transactions, items, average basket, items per basket, distinct clients, visitor share, people in and out, and conversion (15.7% at the flagships, 15.5% in retail, empty online); for the top clients, total spent, transactions, items, average basket, stores visited and online share. All identical.
 
 **Querying:** measures through `MEASURE()`, dimensions by name in backticks, `GROUP BY ALL`. For example, the store KPIs of the current simulation:
 
 ```sql
 SELECT `Store`, `Store Name`, MEASURE(`Revenue`) AS revenue, MEASURE(`Average Basket`) AS average_basket
-FROM workspace.test02_metric.sales_metrics
+FROM workspace.test02_metric.store_metrics
 WHERE `Simulation` = (SELECT MAX(simulation_id) FROM workspace.test02_streaming.silver_sales_transactions)
 GROUP BY ALL
 ORDER BY revenue DESC

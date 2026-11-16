@@ -8,13 +8,13 @@ resources:
         ALTERs it to the definition, so the grants on it survive. See doc/kpi_metrics.md.
       # No schedule and no trigger: run on demand, after deploying a change to src/metrics/.
       tasks:
-        - task_key: sales_metrics
+        - task_key: client_metrics
           sql_task:
             warehouse_id: ${var.warehouse_id}
             file:
-              path: ../src/metrics/sales_metrics.sql
-        - task_key: people_metrics
+              path: ../src/metrics/client_metrics.sql
+        - task_key: store_metrics
           sql_task:
             warehouse_id: ${var.warehouse_id}
             file:
-              path: ../src/metrics/people_metrics.sql
+              path: ../src/metrics/store_metrics.sql

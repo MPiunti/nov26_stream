@@ -33,3 +33,14 @@ resources:
             securable_full_name: ${var.catalog}.${var.warehouse_schema}.dim_product
             securable_type: TABLE
             permission: SELECT
+        # Clienteling tab: the metric views (doc/kpi_metrics.md), created by the job retail-metric-views.
+        - name: client-metrics
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.metric_schema}.client_metrics
+            securable_type: TABLE
+            permission: SELECT
+        - name: store-metrics
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.metric_schema}.store_metrics
+            securable_type: TABLE
+            permission: SELECT

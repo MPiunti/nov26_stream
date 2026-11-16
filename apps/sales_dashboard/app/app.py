@@ -1,7 +1,8 @@
 """Sales BI dashboard: self-service sales and people performance, read live from the silver tables.
 
-Read-only: it queries silver_sales_transactions, silver_people_counter_events and the dimensions through the
-SQL warehouse, and refreshes every REFRESH_SECONDS. No coupling with the people-stream app or the pipeline.
+Read-only: it queries the current-simulation views of silver, the metric views of test02_metric (Clienteling
+tab) and the dimensions through the SQL warehouse, and refreshes every REFRESH_SECONDS. No coupling with the
+people-stream app or the pipeline.
 Times are GMT (UTC). Layout and sizes: assets/dashboard.css. See doc/sales_dashboard.md.
 """
 import os
@@ -9,7 +10,8 @@ import threading
 from datetime import datetime, timezone
 
 import dash_bootstrap_components as dbc
-from dash import Dash, Input, Output, State, ctx, dcc, html, no_update
+from dash import Dash, Input, Output, State, ctx, dash_table, dcc, html, no_update
+from dash.dash_table.Format import Format, Group, Scheme, Symbol
 
 import bi
 import dashboard_sql as q
@@ -163,30 +165,112 @@ def channel_panel():
     ], height="100%")
 
 
+# ------------------------------------------------------------------ Clienteling tab (metric views)
+
+# Cards: store KPIs over every store in the filters (store_metrics). (alias, label, kind)
+CL_CARDS = (("revenue", "REVENUE", "eur"), ("transactions", "TRANSACTIONS", "count"),
+            ("average_basket", "AVG BASKET", "eur"), ("distinct_clients", "CLIENTS", "count"),
+            ("visitor_share", "VISITOR SHARE", "pct"), ("conversion", "CONVERSION", "pct"))
+_EUR = Format(precision=0, scheme=Scheme.fixed, group=Group.yes, symbol=Symbol.yes, symbol_prefix="€ ")
+_COUNT = Format(precision=0, scheme=Scheme.fixed, group=Group.yes)
+_DEC2 = Format(precision=2, scheme=Scheme.fixed)
+_PCT = Format(precision=1, scheme=Scheme.percentage)
+STORE_COLUMNS = (("store", "Store", None), ("store_name", "Name", None), ("channel", "Channel", None),
+                 ("store_country", "Country", None), ("revenue", "Revenue", _EUR),
+                 ("transactions", "Transactions", _COUNT), ("average_basket", "Avg basket", _EUR),
+                 ("items_per_basket", "Items / basket", _DEC2), ("distinct_clients", "Clients", _COUNT),
+                 ("visitor_share", "Visitor share", _PCT), ("people_in", "People in", _COUNT),
+                 ("conversion", "Conversion", _PCT))
+CLIENT_COLUMNS = (("client", "Client", None), ("client_country", "Country", None),
+                  ("total_spent", "Total spent", _EUR), ("transactions", "Transactions", _COUNT),
+                  ("items", "Items", _COUNT), ("average_basket", "Avg basket", _EUR),
+                  ("stores_visited", "Stores visited", _COUNT), ("online_share", "Online share", _PCT))
+
+
+def kpi_table(component_id, columns):
+    """A compact table, sortable by clicking a column header; numbers formatted, sorted as numbers."""
+    return dash_table.DataTable(
+        id=component_id, data=[], sort_action="native", page_action="none",
+        columns=[{"id": c, "name": n, **({"type": "numeric", "format": fmt} if fmt else {})} for c, n, fmt in columns],
+        style_table={"overflowX": "auto"}, style_as_list_view=True,
+        style_header={"fontWeight": "600", "fontSize": "10px", "backgroundColor": "#f2f2f2", "textTransform": "uppercase"},
+        style_cell={"fontSize": "11px", "padding": "3px 6px", "fontFamily": "Segoe UI, Helvetica, Arial, sans-serif",
+                    "border": "none", "borderBottom": "1px solid #ececec", "backgroundColor": "transparent"},
+        style_cell_conditional=[{"if": {"column_type": "numeric"}, "textAlign": "right"}])
+
+
+def clienteling_tab():
+    """Client and store KPIs from the metric views client_metrics and store_metrics, current simulation."""
+    return html.Div([
+        html.Div(id="cl-alert"),
+        html.Div([html.Span("Clienteling", className="panel-title me-2"),
+                  html.Span(id="cl-subtitle", className="tiny text-muted")], className="mb-1"),
+        dbc.Row([dbc.Col(html.Div(id=f"cl-card-{alias}"), xs=6, sm=4, lg=2, className="mb-2")
+                 for alias, _, _ in CL_CARDS], className="g-2"),
+        dbc.Row([
+            dbc.Col(panel([html.Div(f"TOP {q.CLIENTELING_ROWS} STORES BY REVENUE", className="panel-title mb-1"),
+                           kpi_table("cl-stores", STORE_COLUMNS)], height="100%"), xs=12, xl=7, className="mb-2"),
+            dbc.Col(panel([html.Div(f"TOP {q.CLIENTELING_ROWS} CLIENTS BY TOTAL SPENT", className="panel-title mb-1"),
+                           kpi_table("cl-clients", CLIENT_COLUMNS)], height="100%"), xs=12, xl=5, className="mb-2"),
+        ], className="g-2"),
+        html.Div("KPI definitions: doc/kpi_glossary.md, the same descriptions as the metric views'. Sort a table by "
+                 "clicking its column headers.", className="tiny text-muted"),
+    ], className="pt-2")
+
+
+def cl_card(label, value, kind):
+    if value is None:
+        text = "—"
+    elif kind == "pct":
+        text = f"{float(value):.1%}"
+    elif float(value) < 1e6:  # in full below a million: an average basket of 1,075 EUR reads € 1,075, not € 1.07 K
+        text = f"{'€ ' if kind == 'eur' else ''}{float(value):,.0f}"
+    else:
+        text = bi.fmt_number(float(value), "EUR" if kind == "eur" else "")
+    return panel([html.Div(label, className="kpi-label text-muted"), html.Div(text, className="kpi-value")],
+                 height="100%")
+
+
+def _plain(rows):
+    """Query rows as JSON-friendly values for the tables: numbers as floats, NULL as empty."""
+    return [{k: (float(v) if v is not None and not isinstance(v, str) else v) for k, v in r.items()} for r in rows]
+
+
+def sales_page():
+    """The Sales performance tab: KPI cards, trend, channel, geography and product breakdowns."""
+    return html.Div([
+        dbc.Row([dbc.Col(html.Div(id=f"card-{k}"), xs=6, sm=4, lg=True, className="mb-2") for k in CARDS],
+                className="g-2 pt-2"),
+        dbc.Row([
+            dbc.Col(panel([
+                html.Div([
+                    html.Div(id="trend-title", className="panel-title"),
+                    dbc.Switch(id="cumulative", value=True, label="Cumulative", className="tiny mb-0"),
+                ], className="d-flex justify-content-between align-items-center flex-wrap"),
+                dcc.Graph(id="trend", config={"displayModeBar": False}),
+            ], height="100%"), xs=12, lg=8, className="mb-2"),
+            dbc.Col(channel_panel(), xs=12, lg=4, className="mb-2"),
+        ], className="g-2"),
+        dbc.Row([
+            dbc.Col(breakdown_panel("geo", GEO_LEVEL_LABEL, "REGION"), xs=12, lg=6, className="mb-2"),
+            dbc.Col(breakdown_panel("product", PRODUCT_LEVEL_LABEL, "CATEGORY"), xs=12, lg=6, className="mb-2"),
+        ], className="g-2"),
+    ])
+
+
 app.layout = html.Div([
     dbc.Row([
         dbc.Col(sidebar(), xs=12, md=3, xl=2, className="mb-2"),
         dbc.Col([
             html.Div(id="alert"),
-            dbc.Row([dbc.Col(html.Div(id=f"card-{k}"), xs=6, sm=4, lg=True, className="mb-2") for k in CARDS],
-                    className="g-2"),
-            dbc.Row([
-                dbc.Col(panel([
-                    html.Div([
-                        html.Div(id="trend-title", className="panel-title"),
-                        dbc.Switch(id="cumulative", value=True, label="Cumulative", className="tiny mb-0"),
-                    ], className="d-flex justify-content-between align-items-center flex-wrap"),
-                    dcc.Graph(id="trend", config={"displayModeBar": False}),
-                ], height="100%"), xs=12, lg=8, className="mb-2"),
-                dbc.Col(channel_panel(), xs=12, lg=4, className="mb-2"),
-            ], className="g-2"),
-            dbc.Row([
-                dbc.Col(breakdown_panel("geo", GEO_LEVEL_LABEL, "REGION"), xs=12, lg=6, className="mb-2"),
-                dbc.Col(breakdown_panel("product", PRODUCT_LEVEL_LABEL, "CATEGORY"), xs=12, lg=6, className="mb-2"),
-            ], className="g-2"),
+            dbc.Tabs(id="page-tab", active_tab="tab-sales", className="mb-2", children=[
+                dbc.Tab(label="Sales performance", tab_id="tab-sales", children=sales_page()),
+                dbc.Tab(label="Clienteling", tab_id="tab-clienteling", children=clienteling_tab()),
+            ]),
             footer(),
         ], xs=12, md=9, xl=10),
     ], className="g-2"),
+
     dcc.Interval(id="refresh", interval=REFRESH_SECONDS * 1000),
     dcc.Interval(id="clock", interval=CLOCK_MS),  # ticks the footer in the browser; no server call
     dcc.Store(id="fresh-ms"),            # epoch ms of the last refresh and of the last sales / people ingestion
@@ -194,6 +278,7 @@ app.layout = html.Div([
     dcc.Store(id="done"),                # the tick of the last refresh that finished
     dcc.Store(id="products", data=[]),   # product filter, set by clicking a product bar
     dcc.Store(id="snapshot"),            # previous refresh's totals, for the live deltas
+    dcc.Store(id="simulation"),          # the current simulation id, for the Clienteling queries
 ], className="page", style={"fontFamily": "Segoe UI, Helvetica, Arial, sans-serif"})
 
 
@@ -345,7 +430,7 @@ def _epoch_ms(value):
     Output("dates", "options"), Output("ts-refresh", "children"), Output("ts-sales", "children"),
     Output("ts-people", "children"), Output("foot-simulation", "children"), Output("foot-rows", "children"),
     Output("fresh-ms", "data"),
-    Output("alert", "children"), Output("snapshot", "data"),
+    Output("alert", "children"), Output("snapshot", "data"), Output("simulation", "data"),
     Output("done", "data"),
     Input("tick", "data"), Input("kpi", "value"), Input("cumulative", "value"),
     Input("dates", "value"), Input("regions", "value"), Input("countries", "value"), Input("stores", "value"),
@@ -383,7 +468,7 @@ def refresh(tick, kpi, cumulative, dates, regions, countries, stores, channels, 
         if "sales" in errors or "people" in errors or "dims" in errors:
             nothing = figures.empty("Waiting for the silver tables")
             return ([no_update] * len(CARDS) + ["", nothing, "", "", nothing, "", "", nothing, "", "", nothing,
-                                                no_update] + [no_update] * 6 + [alert, snapshot, tick])
+                                                no_update] + [no_update] * 6 + [alert, snapshot, no_update, tick])
 
     sales_rows, people_rows = bi.normalize(res["sales"]), bi.normalize(res["people"])
     current = bi.totals(sales_rows, people_rows)
@@ -439,7 +524,40 @@ def refresh(tick, kpi, cumulative, dates, regions, countries, stores, channels, 
                      f"PRODUCT · {bi.KPIS[product_kpi][0].upper()} BY "
                      f"{PRODUCT_LEVEL_LABEL[product_level].upper()}, PER GMT DATE", product_path, product_fig,
                      f"CHANNEL · {kpi_label.upper()} BY CHANNEL, PER GMT DATE", channel_path, channel_fig,
-                     date_options] + foot + [fresh_ms, alert, {"signature": sig, "totals": current}, tick])
+                     date_options] + foot + [fresh_ms, alert, {"signature": sig, "totals": current},
+                                             simulation_id, tick])
+
+
+@app.callback(
+    [Output(f"cl-card-{alias}", "children") for alias, _, _ in CL_CARDS],
+    Output("cl-stores", "data"), Output("cl-clients", "data"), Output("cl-subtitle", "children"),
+    Output("cl-alert", "children"),
+    Input("done", "data"), Input("page-tab", "active_tab"),
+    State("simulation", "data"), State("dates", "value"), State("regions", "value"), State("countries", "value"),
+    State("stores", "value"), State("channels", "value"), State("categories", "value"),
+)
+def clienteling(_done, tab, simulation, dates, regions, countries, stores, channels, categories):
+    """Client and store KPIs from the metric views. Runs after every refresh of the page (so with the same
+    filters and cadence), and only while the Clienteling tab is open: no queries otherwise."""
+    outputs = len(CL_CARDS) + 4
+    if tab != "tab-clienteling":
+        return [no_update] * outputs
+    if not simulation:
+        return [no_update] * (outputs - 2) + ["waiting for the first simulation in silver", None]
+    f = make_filters(dates, regions, countries, stores, channels, categories, [])
+    res = wh.query_many({"totals": q.store_totals_sql(f, simulation), "stores": q.store_kpis_sql(f, simulation),
+                         "clients": q.client_kpis_sql(f, simulation)})
+    errors = {k: v for k, v in res.items() if isinstance(v, Exception)}
+    if errors:
+        alert = dbc.Alert("Clienteling: some queries failed; retrying at the next refresh. "
+                          + "; ".join(f"{k}: {str(e).splitlines()[0][:160]}" for k, e in errors.items()),
+                          color="warning", className="mb-2 py-1 tiny")
+        return [no_update] * (outputs - 1) + [alert]
+    totals = (res["totals"] or [{}])[0]
+    cards = [cl_card(label, totals.get(alias), kind) for alias, label, kind in CL_CARDS]
+    subtitle = (f"simulation {simulation} · metric views client_metrics and store_metrics · "
+                + ("category filter applies to clients only" if f.categories else "all filters of the page apply"))
+    return cards + [_plain(res["stores"]), _plain(res["clients"]), subtitle, None]
 
 
 if __name__ == "__main__":

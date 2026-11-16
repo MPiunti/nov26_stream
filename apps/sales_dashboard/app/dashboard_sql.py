@@ -14,6 +14,9 @@ DEFAULT_TABLES = {
     "PEOPLE_TABLE": "workspace.test02_streaming.current_people_counter_events",
     "STORE_TABLE": "workspace.test02_warehouse.dim_store",
     "PRODUCT_TABLE": "workspace.test02_warehouse.dim_product",
+    # Metric views of the Clienteling tab (doc/kpi_metrics.md, doc/kpi_glossary.md).
+    "CLIENT_METRICS": "workspace.test02_metric.client_metrics",
+    "STORE_METRICS": "workspace.test02_metric.store_metrics",
 }
 
 # Drill-down levels: the column each level groups by. Labels come from the dimension cache in the app.
@@ -176,3 +179,75 @@ def stores_sql():
 def products_sql():
     return (f"SELECT product_id, product_name, category FROM {table('PRODUCT_TABLE')} "
             f"WHERE is_active ORDER BY product_id"), {}
+
+
+# ------------------------------------------------------------------ Clienteling: the metric views
+
+_SIMULATION = re.compile(r"\d{8}T\d{9}")
+CLIENTELING_ROWS = 20  # rows of the stores and clients tables
+
+# (measure in the metric view, column alias)
+CLIENT_KPIS = (("Total Spent", "total_spent"), ("Transactions", "transactions"), ("Items", "items"),
+               ("Average Basket", "average_basket"), ("Stores Visited", "stores_visited"),
+               ("Online Share", "online_share"))
+STORE_KPIS = (("Revenue", "revenue"), ("Transactions", "transactions"), ("Average Basket", "average_basket"),
+              ("Items per Basket", "items_per_basket"), ("Distinct Clients", "distinct_clients"),
+              ("Visitor Share", "visitor_share"), ("People In", "people_in"), ("Conversion", "conversion"))
+
+
+def metric_where(f, simulation, categories=False):
+    """WHERE on the metric views' dimensions: the simulation, then the page's filters.
+
+    Both views have the store and time dimensions; only client_metrics has Category. The product filter
+    doesn't apply here (the tab is about clients and stores).
+    """
+    if not _SIMULATION.fullmatch(simulation or ""):
+        raise ValueError(f"bad simulation id {simulation!r}")
+    clauses, params = ["`Simulation` = :simulation"], {"simulation": simulation}
+    if f.dates:
+        clauses.append(_in("`Date (GMT)`", "date", f.dates, params, cast="DATE"))
+    for column, name, values in (("`Macro Region`", "region", f.regions), ("`Store Country`", "country", f.countries),
+                                 ("`Store`", "store", f.stores), ("`Channel`", "channel", f.channels)):
+        if values:
+            clauses.append(_in(column, name, values, params))
+    if categories and f.categories:
+        clauses.append(_in("`Category`", "category", f.categories, params))
+    return "WHERE " + "\n  AND ".join(clauses), params
+
+
+def _measures(kpis):
+    return ",\n  ".join(f"MEASURE(`{measure}`) AS {alias}" for measure, alias in kpis)
+
+
+def client_kpis_sql(f, simulation, limit=CLIENTELING_ROWS):
+    """The top clients by total spent, with their KPIs."""
+    clause, params = metric_where(f, simulation, categories=True)
+    sql = f"""SELECT `Client` AS client, `Client Country` AS client_country,
+  {_measures(CLIENT_KPIS)}
+FROM {table('CLIENT_METRICS')}
+{clause}
+GROUP BY ALL
+ORDER BY total_spent DESC
+LIMIT {int(limit)}"""
+    return sql, params
+
+
+def store_kpis_sql(f, simulation, limit=CLIENTELING_ROWS):
+    """The top stores by revenue, with their KPIs."""
+    clause, params = metric_where(f, simulation)
+    sql = f"""SELECT `Store` AS store, `Store Name` AS store_name, `Channel` AS channel, `Store Country` AS store_country,
+  {_measures(STORE_KPIS)}
+FROM {table('STORE_METRICS')}
+{clause}
+GROUP BY ALL
+ORDER BY revenue DESC
+LIMIT {int(limit)}"""
+    return sql, params
+
+
+def store_totals_sql(f, simulation):
+    """The store KPIs over every store in the filters: the Clienteling cards."""
+    clause, params = metric_where(f, simulation)
+    return f"""SELECT {_measures(STORE_KPIS)}
+FROM {table('STORE_METRICS')}
+{clause}""", params

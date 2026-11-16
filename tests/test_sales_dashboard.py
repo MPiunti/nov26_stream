@@ -29,6 +29,9 @@ def _all_queries(f):
     yield q.freshness_sql()
     yield q.stores_sql()
     yield q.products_sql()
+    yield q.client_kpis_sql(f, "20261116T202836703")
+    yield q.store_kpis_sql(f, "20261116T202836703")
+    yield q.store_totals_sql(f, "20261116T202836703")
 
 
 def _sales(date, hour, value, quantity=1, region="EUROPE"):
@@ -61,7 +64,9 @@ class QueryTests(unittest.TestCase):
             "SALES_TABLE": "workspace.test02_streaming.current_sales_transactions",
             "PEOPLE_TABLE": "workspace.test02_streaming.current_people_counter_events",
             "STORE_TABLE": "workspace.test02_warehouse.dim_store",
-            "PRODUCT_TABLE": "workspace.test02_warehouse.dim_product"})
+            "PRODUCT_TABLE": "workspace.test02_warehouse.dim_product",
+            "CLIENT_METRICS": "workspace.test02_metric.client_metrics",
+            "STORE_METRICS": "workspace.test02_metric.store_metrics"})
 
     def test_filter_values_are_parameters_not_sql(self):
         evil = "x' OR '1'='1"
@@ -134,6 +139,65 @@ class QueryTests(unittest.TestCase):
                 q.table("SALES_TABLE")
         finally:
             del os.environ["SALES_TABLE"]
+
+
+class ClientelingTests(unittest.TestCase):
+    """The Clienteling tab: client and store KPIs from the metric views (doc/kpi_metrics.md)."""
+
+    def test_reads_the_metric_views_with_measure(self):
+        sql, params = q.client_kpis_sql(q.Filters(), "20261116T202836703")
+        self.assertIn("FROM workspace.test02_metric.client_metrics", sql)
+        for measure, alias in q.CLIENT_KPIS:
+            self.assertIn(f"MEASURE(`{measure}`) AS {alias}", sql)
+        self.assertIn("ORDER BY total_spent DESC\nLIMIT 20", sql)
+        sql, _ = q.store_kpis_sql(q.Filters(), "20261116T202836703")
+        self.assertIn("FROM workspace.test02_metric.store_metrics", sql)
+        self.assertIn("MEASURE(`Conversion`) AS conversion", sql)
+        self.assertIn("ORDER BY revenue DESC", sql)
+        totals, _ = q.store_totals_sql(q.Filters(), "20261116T202836703")
+        self.assertNotIn("GROUP BY", totals, "the cards: one row over every store in the filters")
+
+    def test_the_kpis_are_the_metric_views_measures(self):
+        """Every measure the tab asks for exists in its metric view (src/metrics/)."""
+        from test_kpi_metrics import _entries
+        _, client = _entries("client_metrics")
+        _, store = _entries("store_metrics")
+        self.assertLessEqual({m for m, _ in q.CLIENT_KPIS}, set(client))
+        self.assertLessEqual({m for m, _ in q.STORE_KPIS}, set(store))
+
+    def test_current_simulation_and_page_filters_are_parameters(self):
+        evil = "x' OR '1'='1"
+        f = q.Filters(regions=(evil,), countries=("US",), stores=("US-NY-001",), channels=("ECOM",),
+                      categories=("SHOES",), dates=("2026-11-16",))
+        sql, params = q.client_kpis_sql(f, "20261116T202836703")
+        self.assertNotIn(evil, sql)
+        self.assertEqual(params["simulation"], "20261116T202836703")
+        for clause in ("`Simulation` = :simulation", "`Date (GMT)` IN (CAST(:date_0 AS DATE))",
+                       "`Macro Region` IN (:region_0)", "`Store Country` IN (:country_0)", "`Store` IN (:store_0)",
+                       "`Channel` IN (:channel_0)", "`Category` IN (:category_0)"):
+            self.assertIn(clause, sql)
+        store_sql, _ = q.store_kpis_sql(f, "20261116T202836703")
+        self.assertNotIn("`Category`", store_sql, "store_metrics has no category: traffic isn't per category")
+        for bad in ("", "latest", "2026' OR 1=1"):
+            with self.assertRaises(ValueError):
+                q.client_kpis_sql(q.Filters(), bad)
+
+    def test_tab_queries_only_while_open_and_after_each_refresh(self):
+        code = read_text(*APP, "app", "app.py")
+        for text in ('dbc.Tab(label="Sales performance", tab_id="tab-sales", children=sales_page())',
+                     'dbc.Tab(label="Clienteling", tab_id="tab-clienteling", children=clienteling_tab())',
+                     'Input("done", "data"), Input("page-tab", "active_tab")',
+                     'if tab != "tab-clienteling":', 'Output("simulation", "data")',
+                     'sort_action="native"'):
+            self.assertIn(text, code)
+        body = code.split("def clienteling(", 1)[1].split("\n\n\n", 1)[0]
+        self.assertLess(body.index('if tab != "tab-clienteling"'), body.index("wh.query_many"), "no query when hidden")
+
+    def test_doc_describes_the_tab(self):
+        doc = read_text("doc", "sales_dashboard.md")
+        for text in ("## 8. Clienteling tab", "`client_metrics`", "`store_metrics`", "TOP 20 STORES BY REVENUE",
+                     "only while the tab is open"):
+            self.assertIn(text, doc)
 
 
 class KpiTests(unittest.TestCase):
@@ -322,7 +386,7 @@ class AppTests(unittest.TestCase):
         self.assertIn('Output("done", "data")', refresh)
         body = code.split("def refresh(", 1)[1].split("\nif __name__", 1)[0]
         self.assertEqual(body.count(", tick])"), 2, "every return reports its tick as done")
-        self.assertIn("PARALLEL_QUERIES = 6", read_text(*APP, "app", "sql_warehouse.py"))
+        self.assertIn("PARALLEL_QUERIES = 9", read_text(*APP, "app", "sql_warehouse.py"))
 
     def test_footer_shows_live_freshness_in_gmt(self):
         """Refresh, last sale, last people event: GMT times, a status dot and an age ticked every second."""
@@ -365,11 +429,16 @@ class AppTests(unittest.TestCase):
                     if isinstance(target, ast.Attribute) and target.attr == "layout":
                         layout_line = node.lineno
         self.assertIsNotNone(layout_line)
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef):
+                defined.setdefault(node.name, node.lineno)
+        layout = [n for n in tree.body if n.lineno == layout_line][0]
+        called = {n.func.id for n in ast.walk(layout) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
         used = set()
         for node in tree.body:  # names read at import time: module-level statements up to the layout, and
             if node.lineno <= layout_line:  # the functions the layout calls
                 used |= {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and n.id.isupper()}
-        for name in used:
+        for name in used | called:
             if name in defined:
                 self.assertLess(defined[name], layout_line, f"{name} is defined after app.layout")
 
@@ -411,6 +480,7 @@ class BundleTests(unittest.TestCase):
         grants = re.findall(r"securable_full_name: \$\{var\.catalog\}\.\$\{var\.(\w+)\}\.(\w+)\s*\n\s*"
                             r"securable_type: TABLE\s*\n\s*permission: (\w+)", res)
         self.assertEqual(sorted(grants), [
+            ("metric_schema", "client_metrics", "SELECT"), ("metric_schema", "store_metrics", "SELECT"),
             ("schema", "current_people_counter_events", "SELECT"), ("schema", "current_sales_transactions", "SELECT"),
             ("warehouse_schema", "dim_product", "SELECT"), ("warehouse_schema", "dim_store", "SELECT")])
         self.assertNotIn("MODIFY", res)

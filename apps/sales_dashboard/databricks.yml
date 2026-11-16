@@ -14,6 +14,9 @@ variables:
   schema:
     description: Streaming schema of the pipeline's silver tables
     default: test02_streaming
+  metric_schema:
+    description: Metric schema of the KPIs the Clienteling tab reads (client_metrics, store_metrics)
+    default: test02_metric
   warehouse_schema:
     description: Data warehouse schema of the dimensions the app reads (dim_store, dim_product)
     default: test02_warehouse

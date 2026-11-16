@@ -13,6 +13,11 @@ env:
     value: workspace.test02_warehouse.dim_store
   - name: PRODUCT_TABLE
     value: workspace.test02_warehouse.dim_product
+  # Metric views of the Clienteling tab (doc/kpi_metrics.md).
+  - name: CLIENT_METRICS
+    value: workspace.test02_metric.client_metrics
+  - name: STORE_METRICS
+    value: workspace.test02_metric.store_metrics
   # Seconds between two refreshes of the screen (at least 2). See doc/sales_dashboard.md, "Freshness".
   - name: REFRESH_SECONDS
     value: "5"

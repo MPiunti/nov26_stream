@@ -7,7 +7,7 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-PARALLEL_QUERIES = 6  # one per refresh query, so a refresh is one round of queries, not two
+PARALLEL_QUERIES = 9  # the page's 6 queries and the Clienteling tab's 3 in one round each, not two
 
 
 class Warehouse:

@@ -23,7 +23,7 @@ All are in the catalog `workspace` (the bundle variable `catalog`).
 | Schema | Bundle variable | Holds | Written by |
 |---|---|---|---|
 | `test02_warehouse` | `warehouse_schema` | **Dimensions** only: `dim_store`, `dim_client`, `dim_product`. Small, slowly changing master data, loaded by idempotent scripts | `src/sql/01_…`, `02_…`, `08_…` to `11_…`, by hand |
-| `test02_metric` | `metric_schema` | **Metric views and KPIs** only: `sales_metrics` and `people_metrics`, governed business measures computed live from the silver tables and the dimensions; see [`kpi_metrics.md`](kpi_metrics.md) and [`kpi_glossary.md`](kpi_glossary.md) | `src/sql/17_…`, by hand (the schema); the metric views, by the job `retail-metric-views` |
+| `test02_metric` | `metric_schema` | **Metric views and KPIs** only: `client_metrics` and `store_metrics`, governed business measures computed live from the silver tables and the dimensions; see [`kpi_metrics.md`](kpi_metrics.md) and [`kpi_glossary.md`](kpi_glossary.md) | `src/sql/17_…`, by hand (the schema); the metric views, by the job `retail-metric-views` |
 | `test02_streaming` | `schema` | **Streaming** only: the append-only sources `simulated_event_source` and `simulated_sales_source`, and the pipeline's streaming tables (bronze, silver, quarantine, for people events and for sales) | The people-stream app (sources), `src/sql/04_…`, `05_…`, `12_…`, and the pipeline |
 
 The pipeline and the apps read the dimensions from `test02_warehouse`; the pipeline and the people-stream app write only to `test02_streaming`, and the sales dashboard writes nothing. Nothing streams into `test02_warehouse`, and `test02_metric` holds only definitions, no data.

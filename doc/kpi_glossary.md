@@ -4,81 +4,74 @@ The functional definition of every KPI and every dimension the KPIs can be slice
 
 **Keeping it true:** the definitions live in `src/metrics/*.sql`. Change a description there and here together: a test fails when a description differs, or when a KPI or dimension is missing on either side.
 
-**Reading the calculations:** `source` is the silver table of the metric view; `dim_store`, `dim_client` and `dim_product` are the dimensions joined on their natural keys. A KPI named in a calculation (e.g. `Revenue / Transactions`) is that KPI, recomputed for the same slice, so ratios stay correct for any client, store, channel, country or date.
+**Reading the calculations:** `source` is the metric view's source table; `dim_store`, `dim_client` and `dim_product` are the dimensions joined on their natural keys. A KPI named in a calculation (e.g. `Total Spent / Transactions`) is that KPI, recomputed for the same slice, so ratios stay correct for any client, store, channel, country, date or hour. `try_divide` leaves a ratio empty instead of failing when there is nothing to divide by.
 
-## 1. Sales KPIs: `workspace.test02_metric.sales_metrics`
+## 1. Client KPIs: `workspace.test02_metric.client_metrics`
 
-Over `silver_sales_transactions`: one row per item sold, in every channel (retail, flagship, e-commerce). A transaction is a basket of items ([`sales.md`](sales.md) §5).
+What each client buys, in every channel (retail, flagship, e-commerce). Over `silver_sales_transactions`: one row per item sold; a transaction is a basket of items ([`sales.md`](sales.md) §5).
 
 ### 1.1 KPIs
 
 | KPI | Functional description | Calculation |
 |---|---|---|
-| Revenue | What was sold, in EUR: the sum of the items' amounts, in every channel. By client it is the client's total spent; by store, the store's revenue. Values are always registered in euro. | `SUM(source.amount)` |
-| Transactions | Number of purchases. A transaction is everything one buyer bought in one store visit or one online order: a basket of one or more items. | `COUNT(DISTINCT source.transaction_id)` |
-| Items | Number of items sold. A transaction holds at most one item per category. | `SUM(source.quantity)` |
-| Average Basket | Average spend per purchase, in EUR: Revenue divided by Transactions. | `Revenue / Transactions` |
-| Items per Basket | Average number of items per purchase: Items divided by Transactions. | `Items / Transactions` |
-| Stores Visited | Number of different points of sale where purchases were made; a country's online store counts as one. By client: the stores the client bought in. | `COUNT(DISTINCT source.store_id)` |
-| Distinct Clients | Number of different clients who bought. Not additive across stores: a client who bought in two stores counts once in each, and once overall. | `COUNT(DISTINCT source.client_id)` |
-| Online Revenue | Revenue in EUR made online, in the e-commerce stores (channel ECOM). | `COALESCE(SUM(source.amount) FILTER (WHERE dim_store.channel = 'ECOM'), 0)` |
-| Online Share | Part of the revenue made online: Online Revenue divided by Revenue. By client: the share of the client's total spent made online. | `Online Revenue / Revenue` |
-| Visitor Revenue | Revenue in EUR from visitors: clients registered in a country other than the store's. | `COALESCE(SUM(source.amount) FILTER (WHERE dim_client.country_code <> dim_store.country_code), 0)` |
-| Visitor Share | Part of the revenue from visitors: Visitor Revenue divided by Revenue. About 70% at the flagships, about 30% in the other physical stores, 0% online. | `Visitor Revenue / Revenue` |
-| Store Transactions | Transactions in physical stores only (RETAIL and FLAGSHIP): the purchases the people counters can be compared with. The numerator of Conversion. | `COUNT(DISTINCT source.transaction_id) FILTER (WHERE dim_store.channel <> 'ECOM')` |
-
-**Client KPIs** are these KPIs by `Client`: **Revenue** is the client's *total spent*, plus Transactions, Items, Average Basket, Stores Visited and Online Share. **Store KPIs** are the same by `Store`: **Revenue**, Transactions, Average Basket, Items per Basket, Distinct Clients, Visitor Share, and Conversion (§3).
+| Total Spent | What the client spent, in EUR, in every channel: the sum of the amounts of the items bought. Values are always registered in euro. | `COALESCE(SUM(source.amount), 0)` |
+| Transactions | Number of purchases the client made. A transaction is everything bought in one store visit or one online order: a basket of one or more items. | `COUNT(DISTINCT source.transaction_id)` |
+| Items | Number of items the client bought, across all purchases. A purchase holds at most one item per category. | `COALESCE(SUM(source.quantity), 0)` |
+| Average Basket | What the client spends per purchase, in EUR: Total Spent divided by Transactions. | `try_divide(Total Spent, Transactions)` |
+| Stores Visited | Number of different points of sale where the client bought; a country's online store counts as one. | `COUNT(DISTINCT source.store_id)` |
+| Online Spent | What the client spent online, in EUR, in the e-commerce stores (channel ECOM). | `COALESCE(SUM(source.amount) FILTER (WHERE dim_store.channel = 'ECOM'), 0)` |
+| Online Share | Part of the client's spend made online: Online Spent divided by Total Spent. | `try_divide(Online Spent, Total Spent)` |
 
 ### 1.2 Dimensions
 
 | Dimension | Functional description | Calculation |
 |---|---|---|
-| Simulation | The simulation the sale belongs to: one START of the people-stream app, identified by its UTC start time (YYYYMMDDTHHMMSSmmm). The latest simulation is the highest id; filter on it to see the current run. | `source.simulation_id` |
+| Simulation | The simulation the purchase belongs to: one START of the people-stream app, identified by its UTC start time (YYYYMMDDTHHMMSSmmm). The latest simulation is the highest id; filter on it to see the current run. | `source.simulation_id` |
 | Client | The buyer, by natural key (CL-<country>-<number>). Every client is registered in one country. | `source.client_id` |
-| Client Country | Country where the buyer is registered (ISO 3166 code). | `dim_client.country_code` |
-| Client Type | Local when the buyer is registered in the store's country, Visitor when registered in another country (a tourist). Online buyers are always local. | `CASE WHEN dim_client.country_code = dim_store.country_code THEN 'Local' ELSE 'Visitor' END` |
-| Store | The point of sale, by natural key: a physical store (e.g. IT-MI-001) or a country's online store (e.g. IT-EC-001). | `source.store_id` |
-| Store Name | Name of the point of sale, e.g. Milan Galleria Vittorio Emanuele, or E-commerce Italy for an online store. | `dim_store.store_name` |
-| Channel | Sales channel of the point of sale: RETAIL (physical store), FLAGSHIP (the two flagships, Milan and New York) or ECOM (the country's online store). | `dim_store.channel` |
-| Store Country | Country of the point of sale (ISO 3166 code). | `dim_store.country_code` |
-| Store Country Name | Country of the point of sale, by name. | `dim_store.country_name` |
-| City | City of the point of sale; Online for the e-commerce stores. | `dim_store.city` |
-| Macro Region | Macro region of the point of sale: EUROPE, AMERICAS or ASIA. | `dim_store.macro_region` |
-| Category | Merchandise category of the item: SHOES, BAGS, READY_TO_WEAR, ACCESSORIES, TRAVEL or SUNGLASSES. | `source.category` |
-| Product | The item sold, by natural key (e.g. SH-0007). | `source.product_id` |
-| Product Name | Name of the item sold, as in the product dimension, e.g. Shoes 007. | `dim_product.product_name` |
-| Date (GMT) | Calendar date of the sale in GMT, the same timeline for every store and channel. | `CAST(source.transaction_timestamp_utc AS DATE)` |
-| Hour (GMT) | Hour of the day of the sale in GMT, 0 to 23. | `HOUR(source.transaction_timestamp_utc)` |
-| Local Date | Calendar date of the sale in the store's local time. | `CAST(source.transaction_timestamp AS DATE)` |
+| Client Country | Country where the client is registered (ISO 3166 code). | `dim_client.country_code` |
+| Client Region | Macro region of the client's registration country: EUROPE, AMERICAS or ASIA. | `dim_client.macro_region` |
+| Client Type | Per purchase: Local when the client is registered in the country of the store where they bought, Visitor when registered in another country (a tourist). Online purchases are always local. | `CASE WHEN dim_client.country_code = dim_store.country_code THEN 'Local' ELSE 'Visitor' END` |
+| Store | Where the client bought, by natural key: a physical store (e.g. IT-MI-001) or a country's online store (e.g. IT-EC-001). | `source.store_id` |
+| Store Name | Name of the point of sale where the client bought, e.g. Milan Galleria Vittorio Emanuele, or E-commerce Italy online. | `dim_store.store_name` |
+| Channel | Sales channel of the purchase: RETAIL (physical store), FLAGSHIP (the two flagships, Milan and New York) or ECOM (online). | `dim_store.channel` |
+| Store Country | Country of the point of sale where the client bought (ISO 3166 code). | `dim_store.country_code` |
+| Macro Region | Macro region of the point of sale where the client bought: EUROPE, AMERICAS or ASIA. | `dim_store.macro_region` |
+| Category | Merchandise category of the items bought: SHOES, BAGS, READY_TO_WEAR, ACCESSORIES, TRAVEL or SUNGLASSES. | `source.category` |
+| Product Name | Name of the item bought, as in the product dimension, e.g. Shoes 007. | `dim_product.product_name` |
+| Date (GMT) | Calendar date of the purchase in GMT, the same timeline for every store and channel. | `CAST(source.transaction_timestamp_utc AS DATE)` |
 
-## 2. Store traffic: `workspace.test02_metric.people_metrics`
+## 2. Store KPIs: `workspace.test02_metric.store_metrics`
 
-Over `silver_people_counter_events`: the people counters at the doors of the physical stores (RETAIL and FLAGSHIP). E-commerce stores have no people counting.
+What each point of sale sells and, for the physical stores, the traffic at the door and the conversion. The source puts two silver facts on one timeline: `silver_sales_transactions` (one row per item sold, every channel) and `silver_people_counter_events` (one row per door-sensor event, physical stores only), each with its store, simulation and GMT time. So sales and traffic aggregate over the same stores, channels, regions, dates and hours, and Conversion is a KPI of its own. In the calculations below the columns are those of that source; `client_country` and `store_country` come from the client and store dimensions.
 
 ### 2.1 KPIs
 
 | KPI | Functional description | Calculation |
 |---|---|---|
-| People In | People who entered the store, as counted by the sensor at the door. | `COALESCE(SUM(source.people_count) FILTER (WHERE source.event_type = 'ENTRY'), 0)` |
-| People Out | People who left the store. Only people leaving can buy, so this is the denominator of Conversion. | `COALESCE(SUM(source.people_count) FILTER (WHERE source.event_type = 'EXIT'), 0)` |
+| Revenue | What the point of sale sold, in EUR: the sum of the amounts of the items sold. Values are always registered in euro. | `COALESCE(SUM(amount), 0)` |
+| Transactions | Number of purchases at the point of sale. A transaction is everything one buyer bought in one store visit or one online order: a basket of one or more items. | `COUNT(DISTINCT transaction_id)` |
+| Items | Number of items sold at the point of sale. A transaction holds at most one item per category. | `COALESCE(SUM(quantity), 0)` |
+| Average Basket | Average spend per purchase at the point of sale, in EUR: Revenue divided by Transactions. | `try_divide(Revenue, Transactions)` |
+| Items per Basket | Average number of items per purchase at the point of sale: Items divided by Transactions. | `try_divide(Items, Transactions)` |
+| Distinct Clients | Number of different clients who bought at the point of sale. Not additive across stores: a client who bought in two stores counts once in each, and once overall. | `COUNT(DISTINCT client_id)` |
+| Visitor Revenue | Revenue in EUR from visitors: clients registered in a country other than the store's. | `COALESCE(SUM(amount) FILTER (WHERE client_country <> store_country), 0)` |
+| Visitor Share | Part of the revenue from visitors: Visitor Revenue divided by Revenue. About 70% at the flagships, about 30% in the other physical stores, 0% online. | `try_divide(Visitor Revenue, Revenue)` |
+| Store Transactions | Transactions in physical stores only (RETAIL and FLAGSHIP): the purchases the people counters can be compared with. The numerator of Conversion. | `COUNT(DISTINCT transaction_id) FILTER (WHERE channel <> 'ECOM')` |
+| People In | People who entered the store, as counted by the sensor at the door. Physical stores only: e-commerce stores have no people counting. | `COALESCE(SUM(people_count) FILTER (WHERE event_type = 'ENTRY'), 0)` |
+| People Out | People who left the store, as counted by the sensor at the door. Only people leaving can buy, so this is the denominator of Conversion. | `COALESCE(SUM(people_count) FILTER (WHERE event_type = 'EXIT'), 0)` |
+| Conversion | Share of the people leaving a physical store who bought something: Store Transactions divided by People Out. Physical stores only (RETAIL and FLAGSHIP); empty for e-commerce, which has no people counting. | `try_divide(Store Transactions, People Out)` |
 
 ### 2.2 Dimensions
 
 | Dimension | Functional description | Calculation |
 |---|---|---|
-| Simulation | The simulation the event belongs to: one START of the people-stream app, identified by its UTC start time (YYYYMMDDTHHMMSSmmm). The latest simulation is the highest id; filter on it to see the current run. | `source.simulation_id` |
-| Store | The physical store whose people counter registered the event, by natural key (e.g. IT-MI-001). | `source.store_id` |
-| Store Name | Name of the store, e.g. Milan Galleria Vittorio Emanuele. | `dim_store.store_name` |
-| Channel | Sales channel of the store: RETAIL or FLAGSHIP. E-commerce stores (ECOM) have no people counting, so they never appear here. | `dim_store.channel` |
-| Store Country | Country of the store (ISO 3166 code). | `dim_store.country_code` |
-| Macro Region | Macro region of the store: EUROPE, AMERICAS or ASIA. | `dim_store.macro_region` |
-| Date (GMT) | Calendar date of the event in GMT, the same timeline as the sales. | `CAST(convert_timezone(source.store_timezone_id, 'UTC', source.event_timestamp) AS DATE)` |
-| Hour (GMT) | Hour of the day of the event in GMT, 0 to 23. | `HOUR(convert_timezone(source.store_timezone_id, 'UTC', source.event_timestamp))` |
-
-## 3. KPIs combining the two metric views
-
-| KPI | Functional description | Calculation |
-|---|---|---|
-| Conversion | Share of the people leaving a physical store who bought something: buyers per person out. Physical stores only (RETAIL and FLAGSHIP); e-commerce has no people counting. | `Store Transactions` (sales_metrics) / `People Out` (people_metrics), for the same stores, dates and hours |
-
-Sales and people counts are two facts at different grains, so each lives in its own metric view and the consumer (the sales dashboard) divides the two for the same slice ([`kpi_metrics.md`](kpi_metrics.md) §6).
+| Simulation | The simulation the sales and events belong to: one START of the people-stream app, identified by its UTC start time (YYYYMMDDTHHMMSSmmm). The latest simulation is the highest id; filter on it to see the current run. | `simulation_id` |
+| Store | The point of sale, by natural key: a physical store (e.g. IT-MI-001) or a country's online store (e.g. IT-EC-001). | `store_id` |
+| Store Name | Name of the point of sale, e.g. Milan Galleria Vittorio Emanuele, or E-commerce Italy for an online store. | `store_name` |
+| Channel | Sales channel of the point of sale: RETAIL (physical store), FLAGSHIP (the two flagships, Milan and New York) or ECOM (the country's online store, which has no people counting). | `channel` |
+| City | City of the point of sale; Online for the e-commerce stores. | `city` |
+| Store Country | Country of the point of sale (ISO 3166 code). | `store_country` |
+| Store Country Name | Country of the point of sale, by name. | `store_country_name` |
+| Macro Region | Macro region of the point of sale: EUROPE, AMERICAS or ASIA. | `macro_region` |
+| Date (GMT) | Calendar date in GMT of the sale or the door event, the same timeline for every store. | `CAST(time_utc AS DATE)` |
+| Hour (GMT) | Hour of the day in GMT of the sale or the door event, 0 to 23. | `HOUR(time_utc)` |

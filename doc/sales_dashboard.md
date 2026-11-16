@@ -8,7 +8,7 @@ The dashboard is the **BI engine** of the solution; how it stays decoupled from 
 
 ## 1. Purpose and boundaries
 
-**Planned: a Clienteling tab** with sales KPIs on clients and stores, built on Unity Catalog metric views in `test02_metric`. The KPIs and the reasons for metric views are in [`kpi_metrics.md`](kpi_metrics.md).
+**Two tabs:** **Sales performance** (§2 to §6) and **Clienteling** (§8), the client and store KPIs from the Unity Catalog metric views in `test02_metric`. The filter area and the footer are shared by both.
 
 | | |
 |---|---|
@@ -116,10 +116,26 @@ All in `app/dashboard_sql.py`:
 
 | Step | How |
 |---|---|
-| Before the first deploy | Deploy the pipeline bundle and run the pipeline at least once, then run `src/sql/15_create_current_simulation_views.sql`, so the views `current_sales_transactions` and `current_people_counter_events` exist (the app's permissions are granted on them). The dimensions come from `src/sql/01_…`, `02_…`, `10_…`, `11_…` |
+| Before the first deploy | Deploy the pipeline bundle and run the pipeline at least once, then run `src/sql/15_create_current_simulation_views.sql`, so the views `current_sales_transactions` and `current_people_counter_events` exist, and run the job `retail-metric-views`, so the metric views `client_metrics` and `store_metrics` exist (the app's permissions are granted on all four). The dimensions come from `src/sql/01_…`, `02_…`, `10_…`, `11_…` |
 | Check | `databricks bundle validate --strict -t dev --profile MPiunti`, from `apps/sales_dashboard/` |
 | Deploy | From `apps/sales_dashboard/`: `databricks bundle deploy -t dev --profile MPiunti`, then `databricks bundle run sales_dashboard -t dev --profile MPiunti` to start the app; or, in the workspace Git folder, open `apps/sales_dashboard/` and use **Deployments** |
-| Granted to the app | `CAN_USE` on the SQL warehouse; `SELECT` on the views `test02_streaming.current_sales_transactions` and `current_people_counter_events`, and on `test02_warehouse.dim_store` and `dim_product`. Nothing else: no access to the silver tables themselves |
+| Granted to the app | `CAN_USE` on the SQL warehouse; `SELECT` on the views `test02_streaming.current_sales_transactions` and `current_people_counter_events`, on the metric views `test02_metric.client_metrics` and `store_metrics`, and on `test02_warehouse.dim_store` and `dim_product`. Nothing else: no access to the silver tables themselves |
 | Stop paying for it | Stop the app under **Compute → Apps**. While open, the page queries the SQL warehouse every 5 seconds, which keeps the warehouse running; switch **Live** off or close the page when you're done |
 
 The pipeline bundle doesn't upload `apps/` (`sync.exclude` in the root `databricks.yml`), and each app bundle has its own state, so deploying one never changes the others.
+
+## 8. Clienteling tab
+
+Client and store KPIs, read from the Unity Catalog metric views `client_metrics` and `store_metrics` in `workspace.test02_metric` ([`kpi_metrics.md`](kpi_metrics.md)). Every KPI's definition is in [`kpi_glossary.md`](kpi_glossary.md), the same text as the metric views' own descriptions.
+
+| Area | Content |
+|---|---|
+| **Cards** | Over every store in the filters, from `store_metrics`: REVENUE, TRANSACTIONS, AVG BASKET, CLIENTS (distinct clients), VISITOR SHARE, CONVERSION (physical stores only) |
+| **TOP 20 STORES BY REVENUE** | From `store_metrics`: store, name, channel, country, revenue, transactions, average basket, items per basket, clients, visitor share, people in, conversion. E-commerce stores have no people in and no conversion |
+| **TOP 20 CLIENTS BY TOTAL SPENT** | From `client_metrics`: client, country, total spent, transactions, items, average basket, stores visited, online share |
+
+- **Sorting:** both tables sort by any column, by clicking its header; numbers sort as numbers.
+- **Current simulation:** the queries filter on the simulation the footer shows (the latest `simulation_id`), passed as a parameter.
+- **Filters:** the page's dates, regions, countries, stores and channels apply to both metric views; the category filter applies to the clients only (traffic isn't per category); the product filter doesn't apply here.
+- **Refresh:** the tab's three queries run after every refresh of the page, so with the same filters and the same 5-second cadence, and **only while the tab is open**: on the Sales performance tab they don't run at all.
+- **Queries:** `SELECT … MEASURE(\`Revenue\`) …` on the metric views, with `GROUP BY ALL`; filter values as named parameters, never pasted into the SQL (`dashboard_sql.py`).
