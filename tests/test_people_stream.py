@@ -692,6 +692,54 @@ class HeadlineTests(unittest.TestCase):
         self.assertNotRegex(css, r"\.sim-clock \.hand \{[^}]*transition", "no animation outside a running simulation")
 
 
+class OperationsTests(unittest.TestCase):
+    """The Switch on / off tab and the signature (operations.py), against doc/people_stream.md section 10."""
+
+    @classmethod
+    def setUpClass(cls):
+        import operations
+        cls.ops = operations
+        cls.doc = read_text("doc", "people_stream.md").split("## 10. Switch on and off", 1)[1]
+
+    def _doc_steps(self, title):
+        table = self.doc.split(title, 1)[1].split("\n\n", 2)[1]
+        return [tuple(c.strip() for c in line.strip("|").split("|"))
+                for line in table.splitlines() if re.match(r"^\| \d", line)]
+
+    def test_tab_and_doc_show_the_same_steps(self):
+        self.assertEqual(self._doc_steps("**Switch on, in this order:**"), list(self.ops.SWITCH_ON))
+        self.assertEqual(self._doc_steps("**Switch off:**"), list(self.ops.SWITCH_OFF))
+        for note in self.ops.NOTES:
+            self.assertIn(f"- {note}", self.doc)
+
+    def test_steps_name_the_real_resources(self):
+        """The job, apps and Git folder the steps name are the bundles' ones."""
+        self.assertIn("name: retail-simulator", read_text("resources", "modeling.peoplecounter.job.yml"))
+        self.assertEqual(self.ops.JOB, "[dev michele_piunti] retail-simulator")
+        self.assertIn("default: people-stream-${workspace.current_user.domain_friendly_name}",
+                      read_text(*APP, "databricks.yml"))
+        self.assertIn("default: sales-bi-${workspace.current_user.domain_friendly_name}",
+                      read_text("apps", "sales_dashboard", "databricks.yml"))
+        self.assertEqual((self.ops.SIMULATOR_APP, self.ops.DASHBOARD_APP),
+                         ("people-stream-michele-piunti", "sales-bi-michele-piunti"))
+        self.assertEqual([s[0] for s in self.ops.SWITCH_ON], [str(i) for i in range(6)], "numbered in order")
+        resume = [s for s in self.ops.SWITCH_ON if s[2] == "Resume"][0]
+        start = [s for s in self.ops.SWITCH_ON if "press START" in s[2]][0]
+        self.assertLess(int(resume[0]), int(start[0]), "the job is resumed before the simulation starts")
+
+    def test_signature_and_git_link(self):
+        self.assertEqual(self.ops.SIGNATURE, "This app is made by Michele Piunti in November 2026.")
+        self.assertEqual(self.ops.REPO_URL, "https://github.com/MPiunti/nov26_stream")
+        self.assertIn("github.com/MPiunti/nov26_stream", read_text("readme.md"), "the readme's Git project")
+        self.assertIn(f"[github.com/MPiunti/nov26_stream]({self.ops.REPO_URL})", self.doc)
+        app = read_text(*APP, "app", "app.py")
+        for text in ('dbc.Tab(label="Switch on / off", tab_id="tab-operations", children=operations_tab())',
+                     "html.A(\"GitHub: MPiunti/nov26_stream\", href=operations.REPO_URL", "signature(),"):
+            self.assertIn(text, app)
+        layout = app.split("def serve_layout():", 1)[1]
+        self.assertLess(layout.index("dbc.Tabs("), layout.index("signature(),"), "at the bottom of the page")
+
+
 class PeopleStreamDocTests(unittest.TestCase):
 
     def test_doc_matches_simulator_constants(self):

@@ -9,6 +9,7 @@ import dash_bootstrap_components as dbc
 from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
 
 import charts
+import operations
 import shop_config
 import simulator as sim
 import sql_warehouse
@@ -133,6 +134,33 @@ def simulator_tab(n_avg):
     ]
 
 
+def steps_table(steps):
+    header = html.Thead(html.Tr([html.Th("#"), html.Th("Where"), html.Th("Action"), html.Th("Why")]))
+    rows = [html.Tr([html.Td(n, className="fw-semibold"), html.Td(where), html.Td(action, className="fw-semibold"),
+                     html.Td(why, className="small text-muted")]) for n, where, action, why in steps]
+    return dbc.Table([header, html.Tbody(rows)], size="sm", responsive=True, className="mb-0")
+
+
+def operations_tab():
+    """How to switch the whole solution on and off by hand in Databricks (operations.py, doc/people_stream.md)."""
+    return html.Div([
+        dbc.Card([dbc.CardHeader("Switch on, in this order"), dbc.CardBody(steps_table(operations.SWITCH_ON))],
+                 className="mb-3 shadow-sm"),
+        dbc.Card([dbc.CardHeader("Switch off"), dbc.CardBody(steps_table(operations.SWITCH_OFF))],
+                 className="mb-3 shadow-sm"),
+        html.Ul([html.Li(note, className="small text-muted") for note in operations.NOTES]),
+    ])
+
+
+def signature():
+    """Who made the app, and where its code is."""
+    return html.Div([
+        html.Span(operations.SIGNATURE),
+        html.Span(" · ", className="mx-1"),
+        html.A("GitHub: MPiunti/nov26_stream", href=operations.REPO_URL, target="_blank", rel="noopener"),
+    ], id="signature", className="small text-muted text-center border-top pt-2 pb-3 mt-2")
+
+
 def counters_tab():
     """The dashboard: in/out counters, people per calendar date, and the cumulative lines."""
     snapshot = simulation.snapshot()
@@ -239,6 +267,7 @@ def serve_layout():
         dbc.Tabs(id="tabs", active_tab="tab-simulator", className="mb-3", children=[
             dbc.Tab(label="Simulator", tab_id="tab-simulator", children=simulator_tab(n_avg)),
             dbc.Tab(label="Counters", tab_id="tab-counters", children=counters_tab()),
+            dbc.Tab(label="Switch on / off", tab_id="tab-operations", children=operations_tab()),
         ]),
         dcc.Interval(id="tick", interval=1000),
         dcc.Store(id="sink-buttons"),
@@ -247,6 +276,7 @@ def serve_layout():
         dcc.Store(id="sink-stay"),
         dcc.Store(id="browser-title"),
         dcc.Store(id="chart-version"),
+        signature(),
     ], fluid=False)
 
 

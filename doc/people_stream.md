@@ -74,7 +74,8 @@ The screen has a header, always visible, and two tabs: **Simulator** (controls) 
 | **Headline panel** | Under the title, always visible, kept current by the screen's 1-second refresh (so it changes with every batch, every 5 seconds). Three blocks: **Simulated time**, an analog clock showing the simulated GMT time, with the timestamp below, e.g. `14 Nov 2026 20:42:29 GMT`; **Simulation id**, e.g. `20261114T201229280` (§6); **Started at**, the START time in GMT. Before the first START the clock is greyed, with both hands up, and the values show `—`; after a run ends they keep its last values |
 | **Analog clock** | Hour and minute hands on a 12-hour dial; morning or afternoon is read from the timestamp below. The hands only turn forwards, also past 12, and glide to the new time between the batches of a running simulation. They jump, without animation, on the first batch of a simulation and when the page is opened |
 | **Browser tab title** | `People stream simulator`; while a run is `RUNNING`, followed by the simulated hour, e.g. `People stream simulator · 2026-11-14 07:00 UTC`. It changes once per simulated hour and never shows "Updating..." |
-| **Tabs** | **Simulator**: sliders, parameters and stream status; no charts. **Counters**: the in/out table, people per calendar date, and the cumulative people-out and people-in charts. The headline panel, START and STOP and the cockpit sit above the tabs |
+| **Signature** | At the bottom of the page: "This app is made by Michele Piunti in November 2026.", with a link to the Git project, [github.com/MPiunti/nov26_stream](https://github.com/MPiunti/nov26_stream) |
+| **Tabs** | **Switch on / off**: how to switch the whole solution on and off by hand in Databricks, the steps of §10. **Simulator**: sliders, parameters and stream status; no charts. **Counters**: the in/out table, people per calendar date, and the cumulative people-out and people-in charts. The headline panel, START and STOP and the cockpit sit above the tabs |
 | **Sales transactions by region and category** (Counters tab) | Per region, for the physical stores: items per category, transactions (baskets), items per transaction, amount in EUR, conversion (transactions per person out), share of local clients. Then the e-commerce stores: transactions, amount, and their share of the region's sales value. See `sales.md` §8 and §12 |
 | **In, out and still inside** (Counters tab) | Per region: people in (sum of `ENTRY`), people out (sum of `EXIT`), their difference (the people still inside open stores), and the measured average stay |
 | **People per calendar date** (Counters tab) | Bar chart: for each calendar date, one bar per region (grouped side by side) with the sum of `people_count` on that date. The date is the store's local date (from `event_timestamp`), the same day the in/out balance uses. A switch picks **People out (EXIT)** (default) or **People in (ENTRY)**. Each bar is that date's total, not a running total. The first and last dates of a run are partial, because the run starts and ends mid-day |
@@ -169,3 +170,32 @@ A run can end while some stores are open: their last `ENTRY` events have no matc
 | Stop paying for it | Stop the app under **Compute → Apps**; STOP alone only stops the simulation |
 
 The pipeline bundle doesn't upload `apps/` (`sync.exclude` in the root `databricks.yml`), and the app bundle has its own state, so deploying one never changes the other.
+
+## 10. Switch on and off
+
+How to switch the whole solution on and off by hand in the Databricks UI: the two apps, the continuous job and, through it, the pipeline. The app's **Switch on / off** tab shows the same steps, from `apps/people_stream/app/operations.py`; change them there and here together (a test checks that they agree). Background: `readme.md`, "Running the pipeline".
+
+**Switch on, in this order:**
+
+| # | Where | Action | Why |
+|---|---|---|---|
+| 0 | Workspace → Git folder retail_people_counter_bundle | Pull | Only after new commits on main: brings the Git folder up to date. Deployed apps keep running their deployed version |
+| 1 | Jobs & Pipelines → [dev michele_piunti] retail-simulator | Resume | First, because the pipeline needs about a minute to start: it's ready when the first events arrive |
+| 2 | Compute → Apps → people-stream-michele-piunti | Start, and wait for Running | This app: the simulation engine |
+| 3 | Compute → Apps → sales-bi-michele-piunti | Start | The BI engine; it can start at the same time as step 2 |
+| 4 | This app, above the tabs | Check the cockpit switches, then press START | Begins a new simulation: 8 minutes (48 simulated hours), or until STOP |
+| 5 | The sales dashboard app | Nothing to do | It switches to the new simulation within seconds; its footer shows the simulation id |
+
+**Switch off:**
+
+| # | Where | Action | Why |
+|---|---|---|---|
+| 1 | This app | Press STOP, or let the run finish | No more events or sales are written |
+| 2 | Jobs & Pipelines → [dev michele_piunti] retail-simulator | Pause | The pipeline stops: no serverless compute running or billed |
+| 3 | Compute → Apps → people-stream-michele-piunti and sales-bi-michele-piunti | Stop | The apps' compute stops |
+| 4 | SQL warehouse (Serverless Starter Warehouse) | Nothing to do | It stops by itself after a while without queries |
+
+- The SQL warehouse needs no step: it starts when an app first queries it.
+- Don't re-run src/sql/15_create_current_simulation_views.sql: re-creating the views drops the sales dashboard's permission to read them.
+
+**Credits:** this app is made by Michele Piunti in November 2026. Code: [github.com/MPiunti/nov26_stream](https://github.com/MPiunti/nov26_stream).
