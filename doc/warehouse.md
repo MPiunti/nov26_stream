@@ -10,20 +10,23 @@ Reference for how the project's tables are organised: which schema holds what, t
 | [`product.md`](product.md) | The product dimension (`dim_product`), categories and prices |
 | [`people_stream.md`](people_stream.md) | The app that streams people events into `simulated_event_source` |
 | [`sales.md`](sales.md) | The sales simulator that streams transactions into `simulated_sales_source`, and the silver sales rules |
+| [`kpi_metrics.md`](kpi_metrics.md) | The KPIs and the metric views that compute them, in `test02_metric`; why metric views |
+| [`kpi_glossary.md`](kpi_glossary.md) | The functional definition of every KPI and dimension, word for word the metric views' comments |
 | [`sales_dashboard.md`](sales_dashboard.md) | The read-only BI app that queries the silver tables and the dimensions |
 
 "Warehouse" on this page means the **data warehouse** (the `test02_warehouse` schema). The app's `sql_warehouse.py` is unrelated: it talks to the Databricks **SQL warehouse**, the compute that runs the app's SQL.
 
-## 1. Two schemas
+## 1. Three schemas
 
-Both are in the catalog `workspace` (the bundle variable `catalog`).
+All are in the catalog `workspace` (the bundle variable `catalog`).
 
 | Schema | Bundle variable | Holds | Written by |
 |---|---|---|---|
 | `test02_warehouse` | `warehouse_schema` | **Dimensions** only: `dim_store`, `dim_client`, `dim_product`. Small, slowly changing master data, loaded by idempotent scripts | `src/sql/01_…`, `02_…`, `08_…` to `11_…`, by hand |
+| `test02_metric` | `metric_schema` | **Metric views and KPIs** only: `sales_metrics` and `people_metrics`, governed business measures computed live from the silver tables and the dimensions; see [`kpi_metrics.md`](kpi_metrics.md) and [`kpi_glossary.md`](kpi_glossary.md) | `src/sql/17_…`, by hand (the schema); the metric views, by the job `retail-metric-views` |
 | `test02_streaming` | `schema` | **Streaming** only: the append-only sources `simulated_event_source` and `simulated_sales_source`, and the pipeline's streaming tables (bronze, silver, quarantine, for people events and for sales) | The people-stream app (sources), `src/sql/04_…`, `05_…`, `12_…`, and the pipeline |
 
-The pipeline and the apps read the dimensions from `test02_warehouse`; the pipeline and the people-stream app write only to `test02_streaming`, and the sales dashboard writes nothing. Nothing streams into `test02_warehouse`.
+The pipeline and the apps read the dimensions from `test02_warehouse`; the pipeline and the people-stream app write only to `test02_streaming`, and the sales dashboard writes nothing. Nothing streams into `test02_warehouse`, and `test02_metric` holds only definitions, no data.
 
 ## 2. Tables
 
@@ -72,6 +75,7 @@ All scripts are in `src/sql/`, run by hand on the SQL warehouse, in number order
 | Clients and products | `08`, `09`, `10`, `11`, check `13` | 100,000 clients, 120 products |
 | Sales source | `12` | Empty sales source |
 | Current-simulation views | `15`, after the pipeline has created the silver tables | Three views (§6) |
+| Metric schema | `17`, then the job `retail-metric-views` | The `test02_metric` schema and its two metric views ([`kpi_metrics.md`](kpi_metrics.md)) |
 
 ## 5. Moving the dimensions out of `test02_streaming`
 

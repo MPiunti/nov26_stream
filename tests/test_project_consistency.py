@@ -374,6 +374,19 @@ class DocsTests(unittest.TestCase):
         for figure in ("**200 stores**", "100,000", "About 1,097 EUR", "Every 5 seconds"):
             self.assertIn(figure, doc)
 
+    def test_kpi_page_records_the_metric_view_decision(self):
+        """doc/kpi_metrics.md feeds the executive summary: the decision, the comparison and the schema."""
+        doc = read_text("doc", "kpi_metrics.md")
+        for text in ("## 1. The decision: metric views", "| | **Metric views** (chosen) | **KPI table refreshed after every silver update** |",
+                     "**Freshness**", "**Cost**", "**Moving parts**", "**One version of the truth**", "**Flexibility**",
+                     "## 3. Feasibility: checked on the workspace", "**identical to the cent**",
+                     "**`test02_metric`**", "**Total spent**", "**Revenue**"):
+            self.assertIn(text, doc)
+        sql = re.sub(r"--[^\n]*", "", read_text("src", "sql", "17_create_metric_schema.sql"))
+        self.assertEqual(re.findall(r"CREATE SCHEMA IF NOT EXISTS (\S+)", sql), ["workspace.test02_metric"])
+        self.assertNotIn("CREATE TABLE", sql.upper(), "the metric schema holds definitions only")
+        self.assertIn("`test02_metric`", read_text("doc", "warehouse.md"))
+
     def test_readme_lists_every_test_file(self):
         readme = read_text("readme.md")
         for f in os.listdir(path("tests")):

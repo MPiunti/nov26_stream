@@ -1,0 +1,20 @@
+resources:
+  jobs:
+    retail_metric_views:
+      name: retail-metric-views-${bundle.target}
+      description: >-
+        Creates or updates the Unity Catalog metric views in the metric schema from their definitions in
+        src/metrics/. Run it after every change to a definition. Each file creates the view if missing, then
+        ALTERs it to the definition, so the grants on it survive. See doc/kpi_metrics.md.
+      # No schedule and no trigger: run on demand, after deploying a change to src/metrics/.
+      tasks:
+        - task_key: sales_metrics
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../src/metrics/sales_metrics.sql
+        - task_key: people_metrics
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../src/metrics/people_metrics.sql

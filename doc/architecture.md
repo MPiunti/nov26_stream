@@ -122,5 +122,6 @@ The pipeline's micro-batch interval is set to 2 seconds; in practice each micro-
 | The source is a simulator writing to tables | Connect Azure Event Hubs; the source tables already have its message envelope |
 | Micro-batches take 4 to 6 seconds | Tune the pipeline's processing per batch, or accept this latency: the simulator itself writes every 5 seconds |
 | E-commerce is sized on the stores' expected sales, with a fixed online curve | Model online traffic too (sessions, conversion), as the stores have people counting |
+| KPIs are computed inside the dashboard's own queries | A governed semantic layer: Unity Catalog **metric views** in `test02_metric`, live on silver, one definition shared by the dashboard, AI/BI and Genie. Chosen over a refreshed KPI table, confirmed to work on the workspace; first use, a Clienteling tab with client and store KPIs ([`kpi_metrics.md`](kpi_metrics.md)) |
 | The dashboard shows only the current simulation | Add a simulation selector, to compare runs: silver already keeps them |
 | Free Edition workspace, one SQL warehouse shared by both apps | A paid workspace separates the simulator's writes from the dashboard's queries |

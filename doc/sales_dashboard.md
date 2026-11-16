@@ -8,6 +8,8 @@ The dashboard is the **BI engine** of the solution; how it stays decoupled from 
 
 ## 1. Purpose and boundaries
 
+**Planned: a Clienteling tab** with sales KPIs on clients and stores, built on Unity Catalog metric views in `test02_metric`. The KPIs and the reasons for metric views are in [`kpi_metrics.md`](kpi_metrics.md).
+
 | | |
 |---|---|
 | **What it does** | Shows sales value (EUR), items sold, average price and people in, on one **GMT** timeline, with filters and drill-down; refreshes **every 5 seconds**, so the numbers grow while the people-stream app and the continuous pipeline run |
