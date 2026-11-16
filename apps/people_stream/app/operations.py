@@ -43,4 +43,6 @@ NOTES = (
     "The Genie agent (Retail KPI Assistant) needs no step: it queries the SQL warehouse only when someone asks it a question.",
     "Don't re-run src/sql/15_create_current_simulation_views.sql: re-creating the views drops the sales "
     "dashboard's permission to read them.",
+    "Pull the Git folder before deploying from it: deploying an older commit rolls an app back to that commit's "
+    "permissions too (e.g. the sales dashboard loses its access to the Genie agent).",
 )
