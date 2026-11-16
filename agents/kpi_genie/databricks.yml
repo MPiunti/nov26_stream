@@ -1,0 +1,36 @@
+# Declarative Automation Bundle for the Genie agent on the KPIs (the semantic metric views).
+# Separate from the pipeline bundle and from the two app bundles: deploy and run it on its own.
+# Bundles have no native Genie resource, so the agent's definition is versioned in src/kpi_genie.json and the
+# job deploy_kpi_genie creates the agent from it, or updates it in place. See doc/kpi_genie.md.
+bundle:
+  name: "retail_kpi_genie_bundle"
+
+include:
+  - resources/*.yml
+
+variables:
+  warehouse_id:
+    description: SQL warehouse the Genie agent runs its queries on.
+    lookup:
+      warehouse: Serverless Starter Warehouse
+  genie_parent_path:
+    description: Workspace folder that holds the Genie agent.
+    default: /Workspace/Users/${workspace.current_user.userName}/genie
+
+targets:
+  # The 'dev' target, for development purposes. This target is the default.
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://dbc-06fb0002-68c5.cloud.databricks.com
+
+  # The 'prod' target, used for production deployment.
+  prod:
+    mode: production
+    workspace:
+      host: https://dbc-06fb0002-68c5.cloud.databricks.com
+      # We always use /Users/michele.piunti@gmail.com for all resources to make sure we only have a single copy.
+      root_path: /Users/michele.piunti@gmail.com/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      user_name: michele.piunti@gmail.com

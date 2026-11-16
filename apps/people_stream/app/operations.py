@@ -40,6 +40,7 @@ SWITCH_OFF = (
 
 NOTES = (
     "The SQL warehouse needs no step: it starts when an app first queries it.",
+    "The Genie agent (Retail KPI Assistant) needs no step: it queries the SQL warehouse only when someone asks it a question.",
     "Don't re-run src/sql/15_create_current_simulation_views.sql: re-creating the views drops the sales "
     "dashboard's permission to read them.",
 )

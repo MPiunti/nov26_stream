@@ -32,6 +32,7 @@ The three parts are **decoupled**: each can be started, stopped, redeployed or r
 |---|---|---|---|
 | **Simulation engine** | The people-stream app | Generates people-counter events for the 200 physical stores, the sales they lead to, and the online sales of the 13 e-commerce stores, and writes them to two source tables, as an event broker would deliver them | [`people_stream.md`](people_stream.md), [`sales.md`](sales.md) |
 | **Data pipeline** | A streaming pipeline kept running by a continuous job | Bronze keeps every message as received; silver keeps the parsed, typed, valid ones; quarantine keeps the invalid ones with the reason | [`readme.md`](../readme.md), [`warehouse.md`](warehouse.md) |
+| **Genie agent** | Retail KPI Assistant | Answers executives' questions in natural language on the KPIs of the metric views, and explains each KPI's definition | [`kpi_genie.md`](kpi_genie.md) |
 | **BI engine** | The sales dashboard app | Self-service sales and footfall analysis, refreshed every 5 seconds, with filters and drill-down | [`sales_dashboard.md`](sales_dashboard.md) |
 
 ## 3. How the engines are decoupled
@@ -51,7 +52,7 @@ What this decoupling means in practice:
 |---|---|
 | **No calls between parts** | The simulator never starts the pipeline or notifies the dashboard. Pressing START only writes data; everything downstream reacts to the data |
 | **Least privilege, by construction** | The simulator may write only the two source tables. The dashboard has `SELECT` on the two views and two dimensions, and nothing else: not even the silver tables. Neither app has any permission on the other's objects |
-| **Independent deployment** | Three separate bundles: pipeline, simulator, dashboard. Deploying or stopping one never changes the others |
+| **Independent deployment** | Four separate bundles: pipeline, simulator, dashboard, Genie agent. Deploying or stopping one never changes the others |
 | **Replaceable ends** | The simulator can be replaced by a real event broker (Azure Event Hubs is the intended one) delivering the same messages; the dashboard by any BI tool that can read the views. The pipeline in the middle doesn't change |
 | **Independent failure** | If the dashboard is down, data keeps flowing. If the simulator stops, the dashboard keeps showing the last simulation. If the pipeline is paused, events wait in the source tables and nothing is lost |
 

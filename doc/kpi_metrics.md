@@ -101,8 +101,9 @@ Agreed with the owner on 16 November 2026, one by one. The functional descriptio
 | Consumer | Reads | Granted by |
 |---|---|---|
 | Sales dashboard, **Clienteling** tab ([`sales_dashboard.md`](sales_dashboard.md) §8) | `client_metrics` and `store_metrics`: cards, top stores, top clients, for the current simulation | `SELECT` in the app's bundle resources (`apps/sales_dashboard/resources/sales_dashboard.app.yml`), granted on deploy |
+| Genie agent **Retail KPI Assistant** ([`kpi_genie.md`](kpi_genie.md)) | `client_metrics` and `store_metrics` for every KPI question, and their descriptions for "what does it mean" questions | The permissions of the user who asks |
 
-Next candidates: AI/BI dashboards and a Genie space on the same metric views, with the same definitions.
+Next candidate: AI/BI dashboards on the same metric views, with the same definitions.
 
 ## 8. The metric views
 

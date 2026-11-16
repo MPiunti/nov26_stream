@@ -1,0 +1,24 @@
+resources:
+  jobs:
+    deploy_kpi_genie:
+      name: deploy-kpi-genie-${bundle.target}
+      description: >-
+        Creates the Genie agent "Retail KPI Assistant" from src/kpi_genie.json, or updates it in place if it exists
+        (same title in the same folder). Run it after every change to the definition. See doc/kpi_genie.md.
+      # No schedule and no trigger: run on demand, after deploying a change to src/kpi_genie.json.
+      tasks:
+        - task_key: deploy_genie
+          environment_key: default
+          spark_python_task:
+            python_file: ../src/deploy_genie.py
+            parameters:
+              - --definition
+              - ${workspace.file_path}/src/kpi_genie.json
+              - --warehouse-id
+              - ${var.warehouse_id}
+              - --parent-path
+              - ${var.genie_parent_path}
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "2"

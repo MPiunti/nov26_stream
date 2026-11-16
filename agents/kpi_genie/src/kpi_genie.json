@@ -1,0 +1,619 @@
+{
+  "title": "Retail KPI Assistant",
+  "description": "KPI assistant for executives of the retail simulation: answers questions on the client and store sales KPIs (revenue, total spent, transactions, average basket, items per basket, distinct clients, visitor and online share, people in and out, conversion) from the governed metric views client_metrics and store_metrics, with the store, client and product dimensions and the current-simulation sales and traffic for details, and explains what each KPI means. Answers for the current simulation unless asked otherwise. Glossary: doc/kpi_glossary.md.",
+  "serialized_space": {
+    "version": 2,
+    "config": {
+      "sample_questions": [
+        {
+          "id": "49245b0382ebe71a86be85a664307891",
+          "question": [
+            "What is the conversion rate by channel?"
+          ]
+        },
+        {
+          "id": "a7f92d771dcabc14d229633d3aae7404",
+          "question": [
+            "What are the top 10 stores by revenue?"
+          ]
+        },
+        {
+          "id": "b844c0b2ba47e17e878b1707207eb331",
+          "question": [
+            "Do visitors spend more per basket than local clients?"
+          ]
+        },
+        {
+          "id": "c2bf9d9f26835d8cf341b91d5fe5b972",
+          "question": [
+            "Who are our top clients by total spent?"
+          ]
+        },
+        {
+          "id": "f781d2c79042f812716953d4a52a4ee4",
+          "question": [
+            "What does Conversion mean and how is it calculated?"
+          ]
+        }
+      ]
+    },
+    "data_sources": {
+      "tables": [
+        {
+          "identifier": "workspace.test02_streaming.current_people_counter_events",
+          "column_configs": [
+            {
+              "column_name": "event_timestamp_raw",
+              "exclude": true
+            },
+            {
+              "column_name": "event_type",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            },
+            {
+              "column_name": "ingestion_timestamp",
+              "exclude": true
+            },
+            {
+              "column_name": "raw_event",
+              "exclude": true
+            },
+            {
+              "column_name": "sensor_id",
+              "exclude": true
+            },
+            {
+              "column_name": "source_offset",
+              "exclude": true
+            },
+            {
+              "column_name": "source_partition",
+              "exclude": true
+            },
+            {
+              "column_name": "source_timestamp",
+              "exclude": true
+            },
+            {
+              "column_name": "source_topic",
+              "exclude": true
+            },
+            {
+              "column_name": "store_timezone_id",
+              "exclude": true
+            }
+          ]
+        },
+        {
+          "identifier": "workspace.test02_streaming.current_sales_transactions",
+          "column_configs": [
+            {
+              "column_name": "category",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            },
+            {
+              "column_name": "currency",
+              "exclude": true
+            },
+            {
+              "column_name": "exit_event_id",
+              "exclude": true
+            },
+            {
+              "column_name": "ingestion_timestamp",
+              "exclude": true
+            },
+            {
+              "column_name": "raw_event",
+              "exclude": true
+            },
+            {
+              "column_name": "source_offset",
+              "exclude": true
+            },
+            {
+              "column_name": "source_partition",
+              "exclude": true
+            },
+            {
+              "column_name": "source_timestamp",
+              "exclude": true
+            },
+            {
+              "column_name": "source_topic",
+              "exclude": true
+            },
+            {
+              "column_name": "store_timezone_id",
+              "exclude": true
+            },
+            {
+              "column_name": "transaction_timestamp_raw",
+              "exclude": true
+            }
+          ]
+        },
+        {
+          "identifier": "workspace.test02_warehouse.dim_client",
+          "column_configs": [
+            {
+              "column_name": "country_code",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            },
+            {
+              "column_name": "created_at",
+              "exclude": true
+            },
+            {
+              "column_name": "is_active",
+              "exclude": true
+            },
+            {
+              "column_name": "macro_region",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            }
+          ]
+        },
+        {
+          "identifier": "workspace.test02_warehouse.dim_product",
+          "column_configs": [
+            {
+              "column_name": "category",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            },
+            {
+              "column_name": "created_at",
+              "exclude": true
+            },
+            {
+              "column_name": "currency",
+              "exclude": true
+            },
+            {
+              "column_name": "is_active",
+              "exclude": true
+            },
+            {
+              "column_name": "product_name",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            }
+          ]
+        },
+        {
+          "identifier": "workspace.test02_warehouse.dim_store",
+          "column_configs": [
+            {
+              "column_name": "channel",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            },
+            {
+              "column_name": "city",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            },
+            {
+              "column_name": "country_name",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            },
+            {
+              "column_name": "created_at",
+              "exclude": true
+            },
+            {
+              "column_name": "is_active",
+              "exclude": true
+            },
+            {
+              "column_name": "macro_region",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            },
+            {
+              "column_name": "store_name",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            },
+            {
+              "column_name": "timezone_id",
+              "exclude": true
+            },
+            {
+              "column_name": "updated_at",
+              "exclude": true
+            }
+          ]
+        }
+      ],
+      "metric_views": [
+        {
+          "identifier": "workspace.test02_metric.client_metrics",
+          "column_configs": [
+            {
+              "column_name": "Category",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            },
+            {
+              "column_name": "Channel",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            },
+            {
+              "column_name": "Client Country",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            },
+            {
+              "column_name": "Client Type",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            },
+            {
+              "column_name": "Macro Region",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            }
+          ]
+        },
+        {
+          "identifier": "workspace.test02_metric.store_metrics",
+          "column_configs": [
+            {
+              "column_name": "Channel",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            },
+            {
+              "column_name": "City",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            },
+            {
+              "column_name": "Macro Region",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            },
+            {
+              "column_name": "Store Country Name",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            },
+            {
+              "column_name": "Store Name",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            }
+          ]
+        }
+      ]
+    },
+    "instructions": {
+      "text_instructions": [
+        {
+          "id": "1cb251ec0d568de6a929b520c4aed8d1",
+          "content": [
+            "## PURPOSE\n",
+            "- Answer executives' questions on the client and store sales KPIs of the retail simulation, and explain what each KPI means and how it is calculated.\n",
+            "- Users are business executives: answer in plain business language; show SQL only when asked.\n",
+            "\n",
+            "## DISAMBIGUATION\n",
+            "- Unless the user names a simulation or asks for all simulations, answer for the current simulation (the Current simulation filters).\n",
+            "- Revenue is the store KPI and Total Spent the client KPI: the same euros, seen by store or by client.\n",
+            "- Conversion means buyers per person leaving a physical store; e-commerce has no conversion.\n",
+            "- When asked what a KPI means, answer from the description of that measure in its metric view.\n",
+            "\n",
+            "## DATA QUALITY NOTES\n",
+            "- E-commerce stores (channel ECOM) have no people counting: People In, People Out and Conversion are empty for them.\n",
+            "- Dates and hours are in GMT.\n",
+            "\n",
+            "## CONSTRAINTS\n",
+            "- For KPIs use the metric views store_metrics and client_metrics; use the tables only for details the metric views don't hold.\n",
+            "- Never show technical columns such as raw_event or the source_ columns.\n",
+            "\n",
+            "## Instructions you must follow when providing summaries\n",
+            "- Amounts in EUR without decimals; percentages with one decimal.\n",
+            "- Always state which simulation the numbers refer to.\n"
+          ]
+        }
+      ],
+      "example_question_sqls": [
+        {
+          "id": "4056fb003a56a9038f9527460a00baec",
+          "question": [
+            "What is the conversion rate by channel?"
+          ],
+          "sql": [
+            "SELECT store_metrics.`Channel`, MEASURE(store_metrics.`Conversion`) AS conversion, MEASURE(store_metrics.`People Out`) AS people_out, MEASURE(store_metrics.`Store Transactions`) AS store_transactions FROM workspace.test02_metric.store_metrics WHERE store_metrics.`Simulation` = (SELECT current_simulation.simulation_id FROM workspace.test02_streaming.current_simulation) GROUP BY ALL ORDER BY store_metrics.`Channel`"
+          ]
+        },
+        {
+          "id": "4d657707fea0ce1bde31297de4c2db06",
+          "question": [
+            "How does revenue build up by macro region over the GMT hours of the day?"
+          ],
+          "sql": [
+            "SELECT store_metrics.`Macro Region`, store_metrics.`Date (GMT)`, store_metrics.`Hour (GMT)`, MEASURE(store_metrics.`Revenue`) AS revenue FROM workspace.test02_metric.store_metrics WHERE store_metrics.`Simulation` = (SELECT current_simulation.simulation_id FROM workspace.test02_streaming.current_simulation) GROUP BY ALL ORDER BY store_metrics.`Date (GMT)`, store_metrics.`Hour (GMT)`, store_metrics.`Macro Region`"
+          ]
+        },
+        {
+          "id": "5bad1f9daff764d7de269ce60a97e48d",
+          "question": [
+            "Who are the top 10 clients by total spent?"
+          ],
+          "sql": [
+            "SELECT client_metrics.`Client`, client_metrics.`Client Country`, MEASURE(client_metrics.`Total Spent`) AS total_spent, MEASURE(client_metrics.`Transactions`) AS transactions FROM workspace.test02_metric.client_metrics WHERE client_metrics.`Simulation` = (SELECT current_simulation.simulation_id FROM workspace.test02_streaming.current_simulation) GROUP BY ALL ORDER BY total_spent DESC LIMIT 10"
+          ]
+        },
+        {
+          "id": "5f372ffa2686542466e589122e9bbcae",
+          "question": [
+            "What are the top 10 stores by revenue?"
+          ],
+          "sql": [
+            "SELECT store_metrics.`Store Name`, store_metrics.`Channel`, MEASURE(store_metrics.`Revenue`) AS revenue FROM workspace.test02_metric.store_metrics WHERE store_metrics.`Simulation` = (SELECT current_simulation.simulation_id FROM workspace.test02_streaming.current_simulation) GROUP BY ALL ORDER BY revenue DESC LIMIT 10"
+          ]
+        },
+        {
+          "id": "d8a5d0675a31e7895737ab2f57e02dc1",
+          "question": [
+            "How many clients bought in more than 3 different stores?"
+          ],
+          "sql": [
+            "WITH clients AS (SELECT client_metrics.`Client` AS client, MEASURE(client_metrics.`Stores Visited`) AS stores_visited FROM workspace.test02_metric.client_metrics WHERE client_metrics.`Simulation` = (SELECT current_simulation.simulation_id FROM workspace.test02_streaming.current_simulation) GROUP BY ALL) SELECT COUNT(*) AS clients FROM clients WHERE clients.stores_visited > 3"
+          ]
+        },
+        {
+          "id": "f652c15d9c2509c1dd15925f7175c558",
+          "question": [
+            "Do visitors spend more per basket than local clients?"
+          ],
+          "sql": [
+            "SELECT client_metrics.`Client Type`, MEASURE(client_metrics.`Average Basket`) AS average_basket, MEASURE(client_metrics.`Transactions`) AS transactions FROM workspace.test02_metric.client_metrics WHERE client_metrics.`Simulation` = (SELECT current_simulation.simulation_id FROM workspace.test02_streaming.current_simulation) GROUP BY ALL ORDER BY client_metrics.`Client Type`"
+          ]
+        }
+      ],
+      "join_specs": [
+        {
+          "id": "1a31026a4920ffce227ab2fdd45b1afd",
+          "left": {
+            "identifier": "workspace.test02_streaming.current_sales_transactions",
+            "alias": "current_sales_transactions"
+          },
+          "right": {
+            "identifier": "workspace.test02_warehouse.dim_store",
+            "alias": "dim_store"
+          },
+          "sql": [
+            "`current_sales_transactions`.`store_id` = `dim_store`.`store_id`",
+            "--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_ONE--"
+          ]
+        },
+        {
+          "id": "95db87b6342b0e28947a74a072a1761e",
+          "left": {
+            "identifier": "workspace.test02_streaming.current_sales_transactions",
+            "alias": "current_sales_transactions"
+          },
+          "right": {
+            "identifier": "workspace.test02_warehouse.dim_product",
+            "alias": "dim_product"
+          },
+          "sql": [
+            "`current_sales_transactions`.`product_id` = `dim_product`.`product_id`",
+            "--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_ONE--"
+          ]
+        },
+        {
+          "id": "983d8eab7582271d002005dddca836b7",
+          "left": {
+            "identifier": "workspace.test02_streaming.current_people_counter_events",
+            "alias": "current_people_counter_events"
+          },
+          "right": {
+            "identifier": "workspace.test02_warehouse.dim_store",
+            "alias": "dim_store"
+          },
+          "sql": [
+            "`current_people_counter_events`.`store_id` = `dim_store`.`store_id`",
+            "--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_ONE--"
+          ]
+        },
+        {
+          "id": "9cf75e4c1c0366b1d0bbe405821da311",
+          "left": {
+            "identifier": "workspace.test02_streaming.current_sales_transactions",
+            "alias": "current_sales_transactions"
+          },
+          "right": {
+            "identifier": "workspace.test02_warehouse.dim_client",
+            "alias": "dim_client"
+          },
+          "sql": [
+            "`current_sales_transactions`.`client_id` = `dim_client`.`client_id`",
+            "--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_ONE--"
+          ]
+        }
+      ],
+      "sql_snippets": {
+        "filters": [
+          {
+            "id": "2a16d2e7156e9f7931bfb0b930934c55",
+            "display_name": "Current simulation (client KPIs)",
+            "sql": [
+              "client_metrics.`Simulation` = (SELECT current_simulation.simulation_id FROM workspace.test02_streaming.current_simulation)"
+            ],
+            "synonyms": [
+              "current simulation",
+              "current run",
+              "latest simulation"
+            ]
+          },
+          {
+            "id": "f21067050da01e8888cacb1d3a0e50d8",
+            "display_name": "Current simulation (store KPIs)",
+            "sql": [
+              "store_metrics.`Simulation` = (SELECT current_simulation.simulation_id FROM workspace.test02_streaming.current_simulation)"
+            ],
+            "synonyms": [
+              "current simulation",
+              "current run",
+              "latest simulation"
+            ]
+          }
+        ]
+      }
+    },
+    "benchmarks": {
+      "questions": [
+        {
+          "id": "185c57fb087e347bfee47839ea9e9739",
+          "question": [
+            "Which 5 client countries spend the most?"
+          ],
+          "answer": [
+            {
+              "format": "SQL",
+              "content": [
+                "SELECT client_metrics.`Client Country`, MEASURE(client_metrics.`Total Spent`) AS total_spent FROM workspace.test02_metric.client_metrics WHERE client_metrics.`Simulation` = (SELECT current_simulation.simulation_id FROM workspace.test02_streaming.current_simulation) GROUP BY ALL ORDER BY total_spent DESC LIMIT 5"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "19bd21e80b2c42257d6cfb6c2c3a7a1a",
+          "question": [
+            "What is the conversion rate of each flagship store?"
+          ],
+          "answer": [
+            {
+              "format": "SQL",
+              "content": [
+                "SELECT store_metrics.`Store Name`, MEASURE(store_metrics.`Conversion`) AS conversion FROM workspace.test02_metric.store_metrics WHERE store_metrics.`Simulation` = (SELECT current_simulation.simulation_id FROM workspace.test02_streaming.current_simulation) AND store_metrics.`Channel` = 'FLAGSHIP' GROUP BY ALL ORDER BY store_metrics.`Store Name`"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "1bdf8907cd3d1c959cbf3be17b4ba6e0",
+          "question": [
+            "What is the revenue by sales channel?"
+          ],
+          "answer": [
+            {
+              "format": "SQL",
+              "content": [
+                "SELECT store_metrics.`Channel`, MEASURE(store_metrics.`Revenue`) AS revenue FROM workspace.test02_metric.store_metrics WHERE store_metrics.`Simulation` = (SELECT current_simulation.simulation_id FROM workspace.test02_streaming.current_simulation) GROUP BY ALL ORDER BY revenue DESC"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "5584ea26153bda9011f5f257d690374b",
+          "question": [
+            "Which 5 stores have the highest average basket?"
+          ],
+          "answer": [
+            {
+              "format": "SQL",
+              "content": [
+                "SELECT store_metrics.`Store Name`, MEASURE(store_metrics.`Average Basket`) AS average_basket FROM workspace.test02_metric.store_metrics WHERE store_metrics.`Simulation` = (SELECT current_simulation.simulation_id FROM workspace.test02_streaming.current_simulation) GROUP BY ALL ORDER BY average_basket DESC LIMIT 5"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "61137804048c4abaf553381c69b4eeb8",
+          "question": [
+            "How many people entered the stores in each macro region?"
+          ],
+          "answer": [
+            {
+              "format": "SQL",
+              "content": [
+                "SELECT store_metrics.`Macro Region`, MEASURE(store_metrics.`People In`) AS people_in FROM workspace.test02_metric.store_metrics WHERE store_metrics.`Simulation` = (SELECT current_simulation.simulation_id FROM workspace.test02_streaming.current_simulation) GROUP BY ALL ORDER BY store_metrics.`Macro Region`"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "6b60096e8badfa180aa3f606e6bef036",
+          "question": [
+            "What share of New York Fifth Avenue's revenue comes from visitors?"
+          ],
+          "answer": [
+            {
+              "format": "SQL",
+              "content": [
+                "SELECT MEASURE(store_metrics.`Visitor Share`) AS visitor_share FROM workspace.test02_metric.store_metrics WHERE store_metrics.`Simulation` = (SELECT current_simulation.simulation_id FROM workspace.test02_streaming.current_simulation) AND store_metrics.`Store Name` = 'New York Fifth Avenue'"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "6db2396a3c0ab3eadf899c257cb9288a",
+          "question": [
+            "How many items does a basket hold on average in each channel?"
+          ],
+          "answer": [
+            {
+              "format": "SQL",
+              "content": [
+                "SELECT store_metrics.`Channel`, MEASURE(store_metrics.`Items per Basket`) AS items_per_basket FROM workspace.test02_metric.store_metrics WHERE store_metrics.`Simulation` = (SELECT current_simulation.simulation_id FROM workspace.test02_streaming.current_simulation) GROUP BY ALL ORDER BY store_metrics.`Channel`"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "aeebd748834b3d788a0e6ef6f1f63134",
+          "question": [
+            "How many different clients bought something?"
+          ],
+          "answer": [
+            {
+              "format": "SQL",
+              "content": [
+                "SELECT MEASURE(store_metrics.`Distinct Clients`) AS distinct_clients FROM workspace.test02_metric.store_metrics WHERE store_metrics.`Simulation` = (SELECT current_simulation.simulation_id FROM workspace.test02_streaming.current_simulation)"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "dcd321bcdcf8a2b554a623e8882b7d93",
+          "question": [
+            "What share of client spending is made online?"
+          ],
+          "answer": [
+            {
+              "format": "SQL",
+              "content": [
+                "SELECT MEASURE(client_metrics.`Online Share`) AS online_share FROM workspace.test02_metric.client_metrics WHERE client_metrics.`Simulation` = (SELECT current_simulation.simulation_id FROM workspace.test02_streaming.current_simulation)"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "f77024044b9a1f45d6f2b07da75a97ed",
+          "question": [
+            "What is the total revenue of the current simulation?"
+          ],
+          "answer": [
+            {
+              "format": "SQL",
+              "content": [
+                "SELECT MEASURE(store_metrics.`Revenue`) AS revenue FROM workspace.test02_metric.store_metrics WHERE store_metrics.`Simulation` = (SELECT current_simulation.simulation_id FROM workspace.test02_streaming.current_simulation)"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

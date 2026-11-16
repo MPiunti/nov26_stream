@@ -196,6 +196,7 @@ How to switch the whole solution on and off by hand in the Databricks UI: the tw
 | 4 | SQL warehouse (Serverless Starter Warehouse) | Nothing to do | It stops by itself after a while without queries |
 
 - The SQL warehouse needs no step: it starts when an app first queries it.
+- The Genie agent (Retail KPI Assistant) needs no step: it queries the SQL warehouse only when someone asks it a question.
 - Don't re-run src/sql/15_create_current_simulation_views.sql: re-creating the views drops the sales dashboard's permission to read them.
 
 **Credits:** this app is made by Michele Piunti in November 2026. Code: [github.com/MPiunti/nov26_stream](https://github.com/MPiunti/nov26_stream).

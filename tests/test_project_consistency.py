@@ -355,11 +355,11 @@ class DocsTests(unittest.TestCase):
                      "current_people_counter_events", "current_sales_transactions", "dim_store", "dim_client",
                      "dim_product", "Simulation engine", "BI engine", "Data pipeline"):
             self.assertIn(name, doc)
-        # Three separate bundles.
+        # Four separate bundles.
         names = [re.search(r'name: "(\w+)"', read_text(*p, "databricks.yml")).group(1)
-                 for p in ((), ("apps", "people_stream"), ("apps", "sales_dashboard"))]
-        self.assertEqual(len(set(names)), 3)
-        self.assertIn("Three separate bundles", doc)
+                 for p in ((), ("apps", "people_stream"), ("apps", "sales_dashboard"), ("agents", "kpi_genie"))]
+        self.assertEqual(len(set(names)), 4)
+        self.assertIn("Four separate bundles", doc)
         # The dashboard may only read the views and two dimensions; the simulator may only write the sources.
         dash = read_text("apps", "sales_dashboard", "resources", "sales_dashboard.app.yml")
         self.assertNotIn("MODIFY", dash)
