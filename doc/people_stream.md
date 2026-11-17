@@ -199,5 +199,6 @@ How to switch the whole solution on and off by hand in the Databricks UI: the tw
 - The Genie agent (Retail KPI Assistant) needs no step: it queries the SQL warehouse only when someone asks it a question.
 - Don't re-run src/sql/15_create_current_simulation_views.sql: re-creating the views drops the sales dashboard's permission to read them.
 - Pull the Git folder before deploying from it: deploying an older commit rolls an app back to that commit's permissions too (e.g. the sales dashboard loses its access to the Genie agent).
+- Deploy app bundles from the PC (bundle deploy, then bundle run). A deploy from the Git folder's Deployments panel uploads no files: Compute > Apps > Deploy then restarts the app on the files of the last PC deploy, an older version.
 
 **Credits:** this app is made by Michele Piunti in November 2026. Code: [github.com/MPiunti/nov26_stream](https://github.com/MPiunti/nov26_stream).

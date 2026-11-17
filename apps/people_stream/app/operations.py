@@ -45,4 +45,7 @@ NOTES = (
     "dashboard's permission to read them.",
     "Pull the Git folder before deploying from it: deploying an older commit rolls an app back to that commit's "
     "permissions too (e.g. the sales dashboard loses its access to the Genie agent).",
+    "Deploy app bundles from the PC (bundle deploy, then bundle run). A deploy from the Git folder's "
+    "Deployments panel uploads no files: Compute > Apps > Deploy then restarts the app on the files of the "
+    "last PC deploy, an older version.",
 )
