@@ -1,6 +1,6 @@
 {
   "title": "Retail KPI Assistant",
-  "description": "KPI assistant for executives of the retail simulation: answers questions on the client and store sales KPIs (revenue, total spent, transactions, average basket, items per basket, distinct clients, visitor and online share, people in and out, conversion) from the governed metric views client_metrics and store_metrics, with the store, client and product dimensions and the current-simulation sales and traffic for details, and explains what each KPI means. Answers for the current simulation unless asked otherwise. Glossary: doc/kpi_glossary.md.",
+  "description": "KPI assistant for executives of the retail simulation: answers questions on the client and store sales KPIs (revenue, total spent, transactions, average basket, items per basket, distinct clients, visitor and online share, people in and out, conversion) and the client segments by spend (OCC to VICSTAR) from the governed metric views client_metrics and store_metrics, with the store, client and product dimensions and the current-simulation sales and traffic for details, and explains what each KPI means. Answers for the current simulation unless asked otherwise. Glossary: doc/kpi_glossary.md.",
   "serialized_space": {
     "version": 2,
     "config": {
@@ -252,6 +252,16 @@
               "enable_entity_matching": true
             },
             {
+              "column_name": "Client Segment",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            },
+            {
+              "column_name": "Client Segment Name",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
+            },
+            {
               "column_name": "Client Type",
               "enable_format_assistance": true,
               "enable_entity_matching": true
@@ -308,6 +318,7 @@
             "- Unless the user names a simulation or asks for all simulations, answer for the current simulation (the Current simulation filters).\n",
             "- Revenue is the store KPI and Total Spent the client KPI: the same euros, seen by store or by client.\n",
             "- Conversion means buyers per person leaving a physical store; e-commerce has no conversion.\n",
+            "- Client segments (OCC, EXP, ASP, POT, VIC1, VICSTAR, ND) are set by a client's spend in the whole simulation; VIC clients means VIC1 and VICSTAR.\n",
             "- When asked what a KPI means, answer from the description of that measure in its metric view.\n",
             "\n",
             "## DATA QUALITY NOTES\n",
@@ -325,6 +336,15 @@
         }
       ],
       "example_question_sqls": [
+        {
+          "id": "202dce0389cfe2e87f9229e5f7090aaf",
+          "question": [
+            "How many clients are in each segment, and how much do they spend?"
+          ],
+          "sql": [
+            "SELECT client_metrics.`Client Segment Rank`, client_metrics.`Client Segment`, client_metrics.`Client Segment Name`, MEASURE(client_metrics.`Clients`) AS clients, MEASURE(client_metrics.`Total Spent`) AS total_spent FROM workspace.test02_metric.client_metrics WHERE client_metrics.`Simulation` = (SELECT current_simulation.simulation_id FROM workspace.test02_streaming.current_simulation) GROUP BY ALL ORDER BY client_metrics.`Client Segment Rank`"
+          ]
+        },
         {
           "id": "4056fb003a56a9038f9527460a00baec",
           "question": [

@@ -7,7 +7,7 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-PARALLEL_QUERIES = 9  # the page's 6 queries and the Clienteling tab's 3 in one round each, not two
+PARALLEL_QUERIES = 10  # the page's 6 queries and the Clienteling tab's 4 in one round each, not two
 
 
 class Warehouse:

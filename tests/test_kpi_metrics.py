@@ -59,10 +59,35 @@ class MetricViewTests(unittest.TestCase):
                 self.assertGreater(len(comment.split()), 5, f"{name}.{entry}: describe it")
 
     def test_client_metrics_over_sales_joined_on_natural_keys(self):
+        """A query source (for the client's simulation spend), with the dimensions joined in it on natural keys."""
         client = _definition("client_metrics")
-        self.assertIn(f"source: {SALES}\n", client)
-        for dim, key in (("dim_client", "client_id"), ("dim_store", "store_id"), ("dim_product", "product_id")):
-            self.assertIn(f"source: workspace.test02_warehouse.{dim}\n    'on': source.{key} = {dim}.{key}", client)
+        source = client.split("source: |", 1)[1].split("\ncomment:", 1)[0]
+        self.assertIn(f"FROM {SALES} s", source)
+        self.assertIn("JOIN workspace.test02_warehouse.dim_store d ON s.store_id = d.store_id", source)
+        self.assertIn("LEFT JOIN workspace.test02_warehouse.dim_client c ON s.client_id = c.client_id", source)
+        self.assertIn("LEFT JOIN workspace.test02_warehouse.dim_product p ON s.product_id = p.product_id", source)
+        self.assertNotIn("\njoins:", client, "a query source can't have joins")
+
+    def test_client_segments(self):
+        """OCC < 600 EUR, EXP < 2,000, ASP < 5,000, POT < 10,000, VIC1 < 15,000, VICSTAR above, ND without spend;
+        set by the client's spend in the whole simulation, so filters don't move a client to another segment."""
+        source = _definition("client_metrics").split("source: |", 1)[1].split("\ncomment:", 1)[0]
+        self.assertIn("SUM(s.amount) OVER (PARTITION BY s.simulation_id, s.client_id) AS client_simulation_spent", source)
+        dims, measures = _entries("client_metrics")
+        bands = [("ND", "Not Defined", 0, None), ("OCC", "Occasional", 1, 600), ("EXP", "Experiencer", 2, 2000),
+                 ("ASP", "Aspiring", 3, 5000), ("POT", "Potential VIC", 4, 10000), ("VIC1", "VIC1", 5, 15000),
+                 ("VICSTAR", "VICSTAR", 6, None)]
+        for name, values in (("Client Segment", [b[0] for b in bands]), ("Client Segment Name", [b[1] for b in bands]),
+                             ("Client Segment Rank", [str(b[2]) for b in bands])):
+            expr = dims[name][0]
+            found = re.findall(r"(?:THEN|ELSE) '?([\w ]+?)'? (?=WHEN|ELSE|END)", expr)
+            self.assertEqual(found, values, name)
+            self.assertEqual(re.findall(r"client_simulation_spent < (\d+)", expr), ["600", "2000", "5000", "10000", "15000"])
+            self.assertIn("client_simulation_spent IS NULL OR client_simulation_spent <= 0 THEN", expr, "ND first")
+        comment = dims["Client Segment"][1]
+        for text in ("OCC (Occasional) under 600 EUR", "VICSTAR 15,000 and more", "ND (Not Defined)", "Fixed per client and simulation"):
+            self.assertIn(text, comment)
+        self.assertEqual(measures["Clients"][0], "COUNT(DISTINCT client_id)")
 
     def test_store_metrics_put_sales_and_traffic_on_one_timeline(self):
         """Both silver facts in one source, so Conversion is a measure that holds for any store, region or hour."""
@@ -83,7 +108,7 @@ class MetricViewTests(unittest.TestCase):
         """The client and store KPIs approved in doc/kpi_metrics.md section 6."""
         _, client = _entries("client_metrics")
         _, store = _entries("store_metrics")
-        for kpi in ("Total Spent", "Transactions", "Items", "Average Basket", "Stores Visited", "Online Share"):
+        for kpi in ("Total Spent", "Transactions", "Items", "Average Basket", "Stores Visited", "Online Share", "Clients"):
             self.assertIn(kpi, client)
         for kpi in ("Revenue", "Transactions", "Average Basket", "Items per Basket", "Distinct Clients",
                     "Visitor Share", "People In", "People Out", "Conversion"):

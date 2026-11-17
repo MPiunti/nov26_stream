@@ -32,6 +32,7 @@ def _all_queries(f):
     yield q.client_kpis_sql(f, "20261116T202836703")
     yield q.store_kpis_sql(f, "20261116T202836703")
     yield q.store_totals_sql(f, "20261116T202836703")
+    yield q.segments_sql(f, "20261116T202836703")
 
 
 def _sales(date, hour, value, quantity=1, region="EUROPE"):
@@ -156,6 +157,24 @@ class ClientelingTests(unittest.TestCase):
         self.assertIn("ORDER BY revenue DESC", sql)
         totals, _ = q.store_totals_sql(q.Filters(), "20261116T202836703")
         self.assertNotIn("GROUP BY", totals, "the cards: one row over every store in the filters")
+
+    def test_clients_by_segment(self):
+        sql, params = q.segments_sql(q.Filters(categories=("SHOES",)), "20261116T202836703")
+        self.assertIn("SELECT `Client Segment Rank` AS segment_rank, `Client Segment` AS segment, "
+                      "`Client Segment Name` AS segment_name", sql)
+        self.assertIn("FROM workspace.test02_metric.client_metrics", sql)
+        self.assertIn("ORDER BY segment_rank", sql)
+        self.assertIn("`Category` IN (:category_0)", sql)
+        self.assertIn("`Client Segment` AS client_segment", q.client_kpis_sql(q.Filters(), "20261116T202836703")[0])
+        from test_kpi_metrics import _entries
+        dims, measures = _entries("client_metrics")
+        self.assertLessEqual({m for m, _ in q.SEGMENT_KPIS}, set(measures))
+        for dim in ("Client Segment", "Client Segment Name", "Client Segment Rank"):
+            self.assertIn(dim, dims)
+        code = read_text(*APP, "app", "app.py")
+        for text in ('kpi_table("cl-segments", SEGMENT_COLUMNS)', '"segments": q.segments_sql(f, simulation)',
+                     'Output("cl-segments", "data")', "def segment_rows(rows):"):
+            self.assertIn(text, code)
 
     def test_the_kpis_are_the_metric_views_measures(self):
         """Every measure the tab asks for exists in its metric view (src/metrics/)."""
@@ -464,7 +483,7 @@ class AppTests(unittest.TestCase):
         self.assertIn('Output("done", "data")', refresh)
         body = code.split("def refresh(", 1)[1].split("\nif __name__", 1)[0]
         self.assertEqual(body.count(", tick])"), 2, "every return reports its tick as done")
-        self.assertIn("PARALLEL_QUERIES = 9", read_text(*APP, "app", "sql_warehouse.py"))
+        self.assertIn("PARALLEL_QUERIES = 10", read_text(*APP, "app", "sql_warehouse.py"))
 
     def test_footer_shows_live_freshness_in_gmt(self):
         """Refresh, last sale, last people event: GMT times, a status dot and an age ticked every second."""

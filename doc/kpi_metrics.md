@@ -81,6 +81,10 @@ Agreed with the owner on 16 November 2026, one by one. The functional descriptio
 | Average basket | Spend per purchase | Total spent / transactions | Approved |
 | Stores visited | Different stores where the client bought | `COUNT(DISTINCT store_id)` by client | Approved |
 | Online share | Part of the client's spend made online | Spend in `ECOM` stores / total spent | Approved |
+| Clients | How many different clients bought | `COUNT(DISTINCT client_id)` | Approved (17 November 2026), to count clients by segment |
+| **Client segment** | The client's tier by what they spent in the whole simulation: OCC (Occasional) under 600 EUR, EXP (Experiencer) 600 to under 2,000, ASP (Aspiring) 2,000 to under 5,000, POT (Potential VIC) 5,000 to under 10,000, VIC1 10,000 to under 15,000, VICSTAR 15,000 and more, ND (Not Defined) with no spend to classify | A dimension of `client_metrics`: a band of the client's total spent in the simulation (a window over client and simulation in the view's source query) | Approved (17 November 2026) |
+
+**Client segments, decided 17 November 2026:** the thresholds were first proposed at 60, 200, 500, 1,000 and 1,500 EUR; with luxury prices (cheapest item 198 EUR, typical purchase about 1,000 EUR) they put no client in OCC and half of the clients in VICSTAR, so they were raised ten times. On the simulation of that day: OCC 13%, EXP 51%, ASP 33%, POT 2.8%, 12 VIC1 clients, no VICSTAR; a 48-hour simulation is short for VIC spending. The segment is **fixed per client and simulation**: "spend of VIC1 clients in Europe" is the European spend of clients who are VIC1 overall. Upper bounds are exclusive: 600 EUR is EXP.
 
 ### 6.2 Stores
 
@@ -111,7 +115,7 @@ One metric view per main entity:
 
 | Metric view | Over | Holds | Definition |
 |---|---|---|---|
-| `workspace.test02_metric.client_metrics` | `silver_sales_transactions`, joined to `dim_client`, `dim_store`, `dim_product` | The client KPIs: Total Spent, Transactions, Items, Average Basket, Stores Visited, Online Spent and Share. 7 measures, 13 dimensions | `src/metrics/client_metrics.sql` |
+| `workspace.test02_metric.client_metrics` | A query on `silver_sales_transactions`, with `dim_client`, `dim_store`, `dim_product` and each client's total spent in the simulation | The client KPIs: Clients, Total Spent, Transactions, Items, Average Basket, Stores Visited, Online Spent and Share, and the client segments. 8 measures, 16 dimensions | `src/metrics/client_metrics.sql` |
 | `workspace.test02_metric.store_metrics` | A query on `silver_sales_transactions` and `silver_people_counter_events`, with the store and client attributes | The store KPIs: Revenue, Transactions, Items, Average Basket, Items per Basket, Distinct Clients, Visitor Revenue and Share, Store Transactions, People In, People Out, Conversion. 12 measures, 10 dimensions | `src/metrics/store_metrics.sql` |
 
 Ratios use `try_divide`, so a slice with nothing to divide by (e-commerce has no people, a store with traffic has no sale yet) shows empty instead of failing. Filtered sums return 0 when nothing matches.

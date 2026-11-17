@@ -222,7 +222,7 @@ def _measures(kpis):
 def client_kpis_sql(f, simulation, limit=CLIENTELING_ROWS):
     """The top clients by total spent, with their KPIs."""
     clause, params = metric_where(f, simulation, categories=True)
-    sql = f"""SELECT `Client` AS client, `Client Country` AS client_country,
+    sql = f"""SELECT `Client` AS client, `Client Country` AS client_country, `Client Segment` AS client_segment,
   {_measures(CLIENT_KPIS)}
 FROM {table('CLIENT_METRICS')}
 {clause}
@@ -242,6 +242,23 @@ FROM {table('STORE_METRICS')}
 GROUP BY ALL
 ORDER BY revenue DESC
 LIMIT {int(limit)}"""
+    return sql, params
+
+
+# Clients by segment (client_metrics' Client Segment dimensions): (measure, alias)
+SEGMENT_KPIS = (("Clients", "clients"), ("Total Spent", "total_spent"), ("Average Basket", "average_basket"),
+                ("Transactions", "transactions"))
+
+
+def segments_sql(f, simulation):
+    """Clients by segment, lowest spend first: a client's segment is set by its spend in the whole simulation."""
+    clause, params = metric_where(f, simulation, categories=True)
+    sql = f"""SELECT `Client Segment Rank` AS segment_rank, `Client Segment` AS segment, `Client Segment Name` AS segment_name,
+  {_measures(SEGMENT_KPIS)}
+FROM {table('CLIENT_METRICS')}
+{clause}
+GROUP BY ALL
+ORDER BY segment_rank"""
     return sql, params
 
 

@@ -183,10 +183,27 @@ STORE_COLUMNS = (("store", "Store", None), ("store_name", "Name", None), ("chann
                  ("items_per_basket", "Items / basket", _DEC2), ("distinct_clients", "Clients", _COUNT),
                  ("visitor_share", "Visitor share", _PCT), ("people_in", "People in", _COUNT),
                  ("conversion", "Conversion", _PCT))
-CLIENT_COLUMNS = (("client", "Client", None), ("client_country", "Country", None),
+CLIENT_COLUMNS = (("client", "Client", None), ("client_country", "Country", None), ("client_segment", "Segment", None),
                   ("total_spent", "Total spent", _EUR), ("transactions", "Transactions", _COUNT),
                   ("items", "Items", _COUNT), ("average_basket", "Avg basket", _EUR),
                   ("stores_visited", "Stores visited", _COUNT), ("online_share", "Online share", _PCT))
+
+
+SEGMENT_COLUMNS = (("segment", "Segment", None), ("segment_name", "Name", None), ("clients", "Clients", _COUNT),
+                   ("clients_share", "Share of clients", _PCT), ("total_spent", "Total spent", _EUR),
+                   ("spent_share", "Share of spend", _PCT), ("average_basket", "Avg basket", _EUR),
+                   ("transactions", "Transactions", _COUNT))
+
+
+def segment_rows(rows):
+    """The segments table: each segment's share of the clients and of the spend, from the rows of segments_sql."""
+    rows = _plain(rows)
+    clients = sum(r.get("clients") or 0 for r in rows)
+    spent = sum(r.get("total_spent") or 0 for r in rows)
+    for r in rows:
+        r["clients_share"] = (r.get("clients") or 0) / clients if clients else None
+        r["spent_share"] = (r.get("total_spent") or 0) / spent if spent else None
+    return rows
 
 
 def kpi_table(component_id, columns):
@@ -209,6 +226,8 @@ def clienteling_tab():
                   html.Span(id="cl-subtitle", className="tiny text-muted")], className="mb-1"),
         dbc.Row([dbc.Col(html.Div(id=f"cl-card-{alias}"), xs=6, sm=4, lg=2, className="mb-2")
                  for alias, _, _ in CL_CARDS], className="g-2"),
+        panel([html.Div("CLIENTS BY SEGMENT · a client's segment is set by its spend in the whole simulation",
+                        className="panel-title mb-1"), kpi_table("cl-segments", SEGMENT_COLUMNS)], marginBottom="8px"),
         dbc.Row([
             dbc.Col(panel([html.Div(f"TOP {q.CLIENTELING_ROWS} STORES BY REVENUE", className="panel-title mb-1"),
                            kpi_table("cl-stores", STORE_COLUMNS)], height="100%"), xs=12, xl=7, className="mb-2"),
@@ -610,7 +629,8 @@ def refresh(tick, kpi, cumulative, dates, regions, countries, stores, channels, 
 
 @app.callback(
     [Output(f"cl-card-{alias}", "children") for alias, _, _ in CL_CARDS],
-    Output("cl-stores", "data"), Output("cl-clients", "data"), Output("cl-subtitle", "children"),
+    Output("cl-stores", "data"), Output("cl-clients", "data"), Output("cl-segments", "data"),
+    Output("cl-subtitle", "children"),
     Output("cl-alert", "children"),
     Input("done", "data"), Input("page-tab", "active_tab"),
     State("simulation", "data"), State("dates", "value"), State("regions", "value"), State("countries", "value"),
@@ -619,14 +639,14 @@ def refresh(tick, kpi, cumulative, dates, regions, countries, stores, channels, 
 def clienteling(_done, tab, simulation, dates, regions, countries, stores, channels, categories):
     """Client and store KPIs from the metric views. Runs after every refresh of the page (so with the same
     filters and cadence), and only while the Clienteling tab is open: no queries otherwise."""
-    outputs = len(CL_CARDS) + 4
+    outputs = len(CL_CARDS) + 5
     if tab != "tab-clienteling":
         return [no_update] * outputs
     if not simulation:
         return [no_update] * (outputs - 2) + ["waiting for the first simulation in silver", None]
     f = make_filters(dates, regions, countries, stores, channels, categories, [])
     res = wh.query_many({"totals": q.store_totals_sql(f, simulation), "stores": q.store_kpis_sql(f, simulation),
-                         "clients": q.client_kpis_sql(f, simulation)})
+                         "clients": q.client_kpis_sql(f, simulation), "segments": q.segments_sql(f, simulation)})
     errors = {k: v for k, v in res.items() if isinstance(v, Exception)}
     if errors:
         alert = dbc.Alert("Clienteling: some queries failed; retrying at the next refresh. "
@@ -637,7 +657,7 @@ def clienteling(_done, tab, simulation, dates, regions, countries, stores, chann
     cards = [cl_card(label, totals.get(alias), kind) for alias, label, kind in CL_CARDS]
     subtitle = (f"simulation {simulation} · metric views client_metrics and store_metrics · "
                 + ("category filter applies to clients only" if f.categories else "all filters of the page apply"))
-    return cards + [_plain(res["stores"]), _plain(res["clients"]), subtitle, None]
+    return cards + [_plain(res["stores"]), _plain(res["clients"]), segment_rows(res["segments"]), subtitle, None]
 
 
 @app.callback(

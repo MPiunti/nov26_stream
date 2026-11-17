@@ -39,7 +39,7 @@ The definition `src/kpi_genie.json` holds the agent's title and description and 
 | **Data sources** | The 7 sources of §2. On the categorical dimensions users name (channel, region, country, store name, category, client type) **entity matching** and **format assistance** are on; technical columns (`raw_event`, `source_…`, ingestion times) are hidden |
 | **Join specs** | Sales lines and door events to the dimensions, on the natural keys (many to one) |
 | **Filters** | **Current simulation**, one for each metric view: the simulation id in `current_simulation`. Synonyms: current simulation, current run, latest simulation |
-| **Example SQL** | 6 checked query shapes: top stores by revenue; conversion by channel; top clients by total spent; average basket of visitors vs locals; revenue by region and GMT hour; clients who bought in more than 3 stores (ranking on a measure, through a CTE) |
+| **Example SQL** | 7 checked query shapes: clients and spend by segment; top stores by revenue; conversion by channel; top clients by total spent; average basket of visitors vs locals; revenue by region and GMT hour; clients who bought in more than 3 stores (ranking on a measure, through a CTE) |
 | **Text instructions** | Short, for what can't be said structurally: the audience, the current-simulation default, Revenue vs Total Spent, conversion and e-commerce, EUR and percentage formats, always naming the simulation |
 | **Sample questions** | Shown in the Genie UI: what Conversion means; top 10 stores by revenue; conversion by channel; top clients by total spent; visitors' vs locals' basket |
 | **Benchmarks** | 10 questions with checked SQL answers (§5) |

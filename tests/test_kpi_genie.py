@@ -131,6 +131,15 @@ class SemanticsTests(unittest.TestCase):
             self.assertIn(text, samples)
         self.assertEqual(len(_space()["benchmarks"]["questions"]), 10)
 
+    def test_knows_the_client_segments(self):
+        s = _space()
+        questions = [e["question"][0] for e in s["instructions"]["example_question_sqls"]]
+        self.assertIn("How many clients are in each segment, and how much do they spend?", questions)
+        client = [m for m in s["data_sources"]["metric_views"] if m["identifier"].endswith("client_metrics")][0]
+        configs = {c["column_name"]: c for c in client["column_configs"]}
+        self.assertTrue(configs["Client Segment"]["enable_entity_matching"])
+        self.assertIn("VIC clients means VIC1 and VICSTAR", "".join(s["instructions"]["text_instructions"][0]["content"]))
+
     def test_join_specs_on_natural_keys(self):
         for j in _space()["instructions"]["join_specs"]:
             left, right = j["left"]["alias"], j["right"]["alias"]
