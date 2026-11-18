@@ -226,9 +226,10 @@ class BundleTests(unittest.TestCase):
             self.assertNotRegex(job, rf"(?m)^\s+{absent}:", "serverless, on demand only")
 
     def test_docs_and_readme(self):
-        readme = read_text("readme.md")
-        for f in ("kpi_genie.json", "deploy_genie.py", "kpi_genie.job.yml", "retail_kpi_genie_bundle", "test_kpi_genie.py"):
-            self.assertIn(f, readme)
+        self.assertIn("retail_kpi_genie_bundle", read_text("readme.md"))
+        layout = read_text("doc", "development.md")
+        for f in ("kpi_genie.json", "deploy_genie.py", "kpi_genie.job.yml", "test_kpi_genie.py"):
+            self.assertIn(f, layout)
         doc = read_text("doc", "kpi_genie.md")
         for text in ("**Retail KPI Assistant**", "**current simulation**", "`deploy-kpi-genie-dev`", "10 questions"):
             self.assertIn(text, doc)

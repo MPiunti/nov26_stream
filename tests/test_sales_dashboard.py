@@ -607,12 +607,12 @@ class BundleTests(unittest.TestCase):
 
 class DocTests(unittest.TestCase):
 
-    def test_readme_lists_app_files(self):
-        readme = read_text("readme.md")
+    def test_layout_lists_app_files(self):
+        readme = read_text("doc", "development.md")
         for root, dirs, files in os.walk(path(*APP)):
             dirs[:] = [d for d in dirs if d not in ("__pycache__", ".databricks")]
             for f in files:
-                self.assertIn(f, readme, f"{os.path.join(root, f)} isn't in readme.md")
+                self.assertIn(f, readme, f"{os.path.join(root, f)} isn't in doc/development.md")
 
     def test_doc_describes_the_screen_and_the_rules(self):
         doc = read_text("doc", "sales_dashboard.md")

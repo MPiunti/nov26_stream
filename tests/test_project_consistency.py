@@ -304,7 +304,8 @@ class PipelineCodeTests(unittest.TestCase):
             self.assertTrue(table.startswith(prefixes), f"REQUIRED_TABLES: {table} isn't in {prefixes}")
 
     def test_rejection_codes_are_documented(self):
-        documented = set(re.findall(r"^\| `([A-Z_]+)` \|", read_text("readme.md"), re.M))
+        section = read_text("doc", "pipeline.md").split("## 2. Validation rules", 1)[1].split("\n## ", 1)[0]
+        documented = set(re.findall(r"^\| `([A-Z_]+)` \|", section, re.M))
         self.assertEqual(_rejection_codes(), documented)
 
 
@@ -387,16 +388,73 @@ class DocsTests(unittest.TestCase):
         self.assertNotIn("CREATE TABLE", sql.upper(), "the metric schema holds definitions only")
         self.assertIn("`test02_metric`", read_text("doc", "warehouse.md"))
 
-    def test_readme_lists_every_test_file(self):
-        readme = read_text("readme.md")
+    def test_testing_page_lists_every_test_file(self):
+        testing = read_text("doc", "testing.md")
         for f in os.listdir(path("tests")):
             if f.endswith(".py"):
-                self.assertIn(f, readme, f"tests/{f} isn't listed in readme.md")
+                self.assertIn(f"`{f}`", testing, f"tests/{f} isn't listed in doc/testing.md")
 
-    def test_readme_lists_every_source_file(self):
+    def test_layout_lists_every_source_file(self):
+        layout = read_text("doc", "development.md").split("## 1. Project layout", 1)[1].split("\n## ", 1)[0]
+        for f in (glob.glob(path("src", "**", "*.*"), recursive=True) + glob.glob(path("resources", "*.yml"))
+                  + glob.glob(path("tests", "*.py")) + glob.glob(path("doc", "*.md"))):
+            self.assertIn(os.path.basename(f), layout, f"{os.path.relpath(f, ROOT)} isn't in doc/development.md")
+
+
+class DocLevelTests(unittest.TestCase):
+    """The documentation is layered: level 0 executive, 1 solution, 2 topics, 3 reference (doc/development.md)."""
+
+    def test_readme_is_one_page_and_gives_every_page_a_level(self):
         readme = read_text("readme.md")
-        for f in glob.glob(path("src", "**", "*.*"), recursive=True) + glob.glob(path("resources", "*.yml")):
-            self.assertIn(os.path.basename(f), readme, f"{os.path.relpath(f, ROOT)} isn't in readme.md")
+        self.assertLess(len(readme.splitlines()), 100, "the readme is the front door: keep it to one page")
+        self.assertIn("](agents.md)", readme)
+        levels = readme.split("## The documentation, by level", 1)[1].split("\n## ", 1)[0]
+        for level in ("**0. Executive**", "**1. Solution**", "**2. Topics**", "**3. Reference**"):
+            self.assertIn(level, levels)
+        self.assertIn("[`executive_brief.md`](doc/executive_brief.md)", levels.split("**1. Solution**")[0])
+        for f in os.listdir(path("doc")):
+            self.assertIn(f"](doc/{f})", levels, f"doc/{f}: give it a level in the readme")
+
+    def test_claude_md_points_to_the_rules_pages(self):
+        text = read_text("CLAUDE.md")
+        for ref in ("@agents.md", "@doc/development.md", "doc/pipeline.md", "doc/testing.md", "doc/decisions.md"):
+            self.assertIn(ref, text)
+
+    def test_executive_brief_links_down_and_uses_the_overview_figures(self):
+        brief = read_text("doc", "executive_brief.md")
+        overview = read_text("doc", "architecture.md")
+        for page in ("architecture.md", "decisions.md", "kpi_glossary.md"):
+            self.assertIn(f"]({page})", brief)
+        # The brief quotes the overview's figures; both must change together.
+        for figure in ("200 stores", "100,000", "600,000 visitors", "126,000 transactions", "137 million EUR",
+                       "3 to 7 seconds", "4 to 6 seconds", "1.6 to 2.0 seconds"):
+            self.assertIn(figure, brief, f"brief: {figure}")
+            self.assertIn(figure, overview, f"architecture.md: {figure}")
+        self.assertIn("8 rules for events, 11 for sales", overview)
+        self.assertIn("8 validation rules for door events and 11 for sales", brief)
+        self.assertIn("All data is synthetic", brief)
+
+    def test_brief_and_overview_name_the_databricks_services_used(self):
+        brief = read_text("doc", "executive_brief.md")
+        overview = read_text("doc", "architecture.md")
+        for service in ("Lakeflow Declarative Pipelines", "Delta Lake", "Unity Catalog", "metric views", "Genie",
+                        "Databricks SQL", "Databricks Apps", "Declarative Automation Bundles"):
+            self.assertIn(service, brief)
+            self.assertIn(service, overview)
+
+    def test_decision_log(self):
+        """Every decision is in the summary table and has its entry, in order, with context, decision and consequences."""
+        log = read_text("doc", "decisions.md")
+        table = re.findall(r"(?m)^\| (D\d+) \| .+ \| (Adopted|Proposed|Replaced)[^|]* \| (.+) \|$", log)
+        entries = re.findall(r"(?m)^## (D\d+)\. ", log)
+        self.assertEqual([d for d, _, _ in table], entries)
+        self.assertEqual(entries, [f"D{i}" for i in range(1, len(entries) + 1)])
+        for d, _, detail in table:
+            self.assertRegex(detail, r"\]\([a-z_]+\.md\)", f"{d}: link the page with the detail")
+        for body in re.split(r"(?m)^## D\d+\. ", log)[1:]:
+            for part in ("**Context:**", "**Consequences:**"):
+                self.assertIn(part, body)
+            self.assertRegex(body, r"\*\*(Proposed decision|Decision):\*\*")
 
 
 if __name__ == "__main__":

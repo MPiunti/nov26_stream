@@ -8,7 +8,7 @@ resources:
       configuration:
         # Micro-batch interval of every streaming table while the job keeps the pipeline running.
         # The default is 5 seconds per table; bronze and silver are chained, so 2 seconds brings
-        # source -> silver well under 5 seconds. See readme.md, "Running the pipeline".
+        # source -> silver well under 5 seconds. See doc/pipeline.md, "Running the pipeline".
         pipelines.trigger.interval: "2 seconds"
       libraries:
         - file:

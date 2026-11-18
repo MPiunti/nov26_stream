@@ -13,7 +13,7 @@ The simulator is the **simulation engine** of the solution; how it stays decoupl
 | | |
 |---|---|
 | **What it does** | Simulates the people flow of all 200 stores and inserts the events into `workspace.test02_streaming.simulated_event_source`. Its sales simulator turns people leaving into sales transactions in `simulated_sales_source`; see [`sales.md`](sales.md) |
-| **What it doesn't do** | Run the pipeline. The pipeline moves new events to bronze, silver and quarantine when it runs; its continuous job keeps it running (`readme.md`, "Running the pipeline"). The sales dashboard ([`sales_dashboard.md`](sales_dashboard.md)) then shows them |
+| **What it doesn't do** | Run the pipeline. The pipeline moves new events to bronze, silver and quarantine when it runs; its continuous job keeps it running ([`pipeline.md`](pipeline.md) §3). The sales dashboard ([`sales_dashboard.md`](sales_dashboard.md)) then shows them |
 | **Bundle** | `apps/people_stream/`, bundle `retail_people_stream_bundle`. Separate from the pipeline bundle at the repo root: deployed, started and destroyed on its own |
 | **App** | `people-stream-<user>` (e.g. `people-stream-michele-piunti`), under **Compute → Apps** |
 | **Code** | `apps/people_stream/app/`: `app.py` (screen), `assets/clock.css` (headline panel and clock), `simulator.py` (generator, standard library only), `sql_warehouse.py` (SQL warehouse reads and writes) |
@@ -137,7 +137,7 @@ All simulated events pass the pipeline's validation rules, so they reach silver;
 ## 7. Writing the events
 
 - **Empty at START:** every START first runs `DELETE FROM` on `simulated_event_source` and `simulated_sales_source`, so each run starts from empty sources and offsets restart at 1. The tables, their permissions and their Delta history stay (no drop: dropping needs table ownership and would remove the app's permissions). The 8 hand-written events of `src/sql/05_…` are removed too; rerun `05_…` to add them back.
-- **No full refresh:** the pipeline keeps running through a START. Bronze skips the START's deletes (`skipChangeCommits`) and goes on with the new simulation's rows; silver keeps the earlier simulations, and the current-simulation views (`warehouse.md` §6) show only the new one, so the sales dashboard switches to it within seconds. The app and the pipeline stay decoupled: the app never starts the pipeline; keep the continuous job resumed (`readme.md`, "Running the pipeline"). The app says so next to the run state.
+- **No full refresh:** the pipeline keeps running through a START. Bronze skips the START's deletes (`skipChangeCommits`) and goes on with the new simulation's rows; silver keeps the earlier simulations, and the current-simulation views (`warehouse.md` §6) show only the new one, so the sales dashboard switches to it within seconds. The app and the pipeline stay decoupled: the app never starts the pipeline; keep the continuous job resumed ([`pipeline.md`](pipeline.md) §3). The app says so next to the run state.
 - **Statement:** one insert-only `MERGE` per batch into `simulated_event_source`, keyed on `source_topic`, `source_partition`, `source_offset`. A retried batch can't insert a row twice, and no row is ever updated or deleted, so bronze keeps streaming from the table.
 - **Connection:** through the SQL warehouse (Serverless Starter Warehouse), as the app's service principal; one connection reused across batches and reopened after an error.
 - **Background writer:** each batch goes into a queue; a separate writer thread writes the batches in order, each batch's people events before its sales transactions. If the warehouse is slower than the ticks, batches wait in the queue (**Waiting to be written** on screen) instead of slowing the simulation; the writer catches up when the load drops. At STOP or after 48 hours the generator stops and the writer finishes the queue (`WRITING`) before the run ends.
@@ -173,7 +173,7 @@ The pipeline bundle doesn't upload `apps/` (`sync.exclude` in the root `databric
 
 ## 10. Switch on and off
 
-How to switch the whole solution on and off by hand in the Databricks UI: the two apps, the continuous job and, through it, the pipeline. The app's **Switch on / off** tab shows the same steps, from `apps/people_stream/app/operations.py`; change them there and here together (a test checks that they agree). Background: `readme.md`, "Running the pipeline".
+How to switch the whole solution on and off by hand in the Databricks UI: the two apps, the continuous job and, through it, the pipeline. The app's **Switch on / off** tab shows the same steps, from `apps/people_stream/app/operations.py`; change them there and here together (a test checks that they agree). Background: [`pipeline.md`](pipeline.md) §3.
 
 **Switch on, in this order:**
 

@@ -4,7 +4,7 @@
 # MAGIC Runs every test in this folder on Databricks, from the Git folder, and fails if any test fails.
 # MAGIC
 # MAGIC Run it before deploying, after pulling a change. The tests read only the project's files; they don't touch any table or pipeline.
-# MAGIC See "Tests" in `readme.md`.
+# MAGIC See `doc/testing.md`.
 
 # COMMAND ----------
 

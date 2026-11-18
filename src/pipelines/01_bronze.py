@@ -22,7 +22,7 @@ def bronze_people_counter_events():
     # skipChangeCommits: every START of the people-stream app deletes the source rows. Without this
     # option the stream would fail on that delete; with it, the delete is skipped and the stream goes on
     # reading the new rows (so the continuous job keeps running). Bronze keeps the earlier rows until a
-    # full refresh rebuilds it from the current source. See readme.md, "Running the pipeline".
+    # full refresh rebuilds it from the current source. See doc/pipeline.md, "Running the pipeline".
     return (
         spark.readStream
             .option("skipChangeCommits", "true")

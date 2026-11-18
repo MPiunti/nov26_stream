@@ -37,9 +37,9 @@ The pipeline and the apps read the dimensions from `test02_warehouse`; the pipel
 | `dim_product` | `test02_warehouse` | One product (SKU) | `product_id`, e.g. `SH-0007` | 120 | `product.md` |
 | `simulated_event_source` | `test02_streaming` | One people-counter message | `source_topic` + `source_partition` + `source_offset` | per run | `dataset.md` §3, `people_stream.md` |
 | `simulated_sales_source` | `test02_streaming` | One sales transaction message | `source_topic` + `source_partition` + `source_offset` | per run | `sales.md` |
-| `bronze_people_counter_events` | `test02_streaming` | One message | as the source | pipeline | `readme.md` |
-| `silver_people_counter_events` | `test02_streaming` | One valid event | `event_id` | pipeline | `readme.md` |
-| `quarantine_people_counter_events` | `test02_streaming` | One invalid event | none | pipeline | `readme.md` |
+| `bronze_people_counter_events` | `test02_streaming` | One message | as the source | pipeline | [`pipeline.md`](pipeline.md) |
+| `silver_people_counter_events` | `test02_streaming` | One valid event | `event_id` | pipeline | [`pipeline.md`](pipeline.md) |
+| `quarantine_people_counter_events` | `test02_streaming` | One invalid event | none | pipeline | [`pipeline.md`](pipeline.md) |
 | `bronze_sales_transactions` | `test02_streaming` | One sales message | as the source | pipeline | `sales.md` §10 |
 | `silver_sales_transactions` | `test02_streaming` | One valid transaction | `transaction_id` | pipeline | `sales.md` §10 |
 | `quarantine_sales_transactions` | `test02_streaming` | One invalid transaction | none | pipeline | `sales.md` §10 |
@@ -90,7 +90,7 @@ The dimensions used to live in `test02_streaming`. To move to the layout above i
 
 Every START of the people-stream app begins a new **simulation**. Its `simulation_id` is the real UTC start time to the millisecond, e.g. `20261114T193627123`: sortable, so the latest simulation is `MAX(simulation_id)`. The app writes it into every event and transaction (`people_stream.md` §6, `sales.md` §5), and the pipeline carries it into the silver and quarantine tables as the column `simulation_id`. Rows that don't come from the app (the 8 hand-written events of `05_…`) have no simulation id.
 
-The pipeline is never stopped or refreshed at a START (`readme.md`, "Running the pipeline"), so silver holds **every** simulation. Three plain views, created once by `src/sql/15_create_current_simulation_views.sql`, keep only the latest:
+The pipeline is never stopped or refreshed at a START ([`pipeline.md`](pipeline.md) §3), so silver holds **every** simulation. Three plain views, created once by `src/sql/15_create_current_simulation_views.sql`, keep only the latest:
 
 | View | Definition |
 |---|---|
@@ -101,4 +101,4 @@ The pipeline is never stopped or refreshed at a START (`readme.md`, "Running the
 - **Plain views, not materialized:** they are evaluated at query time, so they add no delay to silver. A new simulation is visible as soon as its first people events reach silver.
 - **Fast filter:** both silver tables are clustered by `simulation_id` (`cluster_by` in the pipeline), so the filter and the `MAX` don't scan earlier simulations.
 - **Readers:** the sales dashboard reads only the two `current_…` views and the dimensions ([`sales_dashboard.md`](sales_dashboard.md)). Anything that should follow the running simulation reads the views; the silver tables remain for looking at earlier simulations.
-- **Housekeeping:** earlier simulations stay in the tables until a full refresh (`readme.md`, "Running the pipeline").
+- **Housekeeping:** earlier simulations stay in the tables until a full refresh ([`pipeline.md`](pipeline.md) §3).

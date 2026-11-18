@@ -757,12 +757,12 @@ class PeopleStreamDocTests(unittest.TestCase):
                      "The hands only turn forwards"):
             self.assertIn(text, doc)
 
-    def test_readme_lists_app_files(self):
-        readme = read_text("readme.md")
+    def test_layout_lists_app_files(self):
+        readme = read_text("doc", "development.md")
         for root, dirs, files in os.walk(path(*APP)):
             dirs[:] = [d for d in dirs if d not in ("__pycache__", ".databricks")]  # local, gitignored
             for f in files:
-                self.assertIn(f, readme, f"{os.path.join(root, f)} isn't in readme.md")
+                self.assertIn(f, readme, f"{os.path.join(root, f)} isn't in doc/development.md")
 
 
 if __name__ == "__main__":

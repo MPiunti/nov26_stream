@@ -2,7 +2,7 @@
 
 Reference for the project's data: the store dimension, the people-counter events, how they are assumed to be streamed into the pipeline, and the volume assumptions. All data is synthetic.
 
-Pipeline steps and validation rules are in [`readme.md`](../readme.md) ("Data flow", "Validation rules"); schemas and keys in [`warehouse.md`](warehouse.md); this page doesn't repeat them.
+Pipeline steps and validation rules are in [`pipeline.md`](pipeline.md) (§1 Data flow, §2 Validation rules); schemas and keys in [`warehouse.md`](warehouse.md); this page doesn't repeat them.
 
 ## 1. Data model
 
@@ -212,7 +212,7 @@ Visitors are assumed to be spread evenly over the 10 opening hours unless a prof
 
 ## 6. The current simulated events
 
-`05_insert_simulated_events.sql` loads 8 hand-written events to exercise the validation rules: 5 valid and 3 invalid (see `readme.md`, "Validation rules"). They don't follow §4 and §5 yet:
+`05_insert_simulated_events.sql` loads 8 hand-written events to exercise the validation rules: 5 valid and 3 invalid (see [`pipeline.md`](pipeline.md) §2). They don't follow §4 and §5 yet:
 
 | Offset | Store | Local time | Inside opening hours? |
 |---|---|---|---|

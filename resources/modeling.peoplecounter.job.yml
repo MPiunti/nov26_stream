@@ -3,7 +3,7 @@ resources:
     retail_people_counter_continuous:
       name: retail-simulator
       description: >-
-        Keeps the people-counter pipeline running, so it picks up every event the people-stream app writes. Resume it for a session and pause it when done; it keeps running through every app START. See readme.md, "Running the pipeline".
+        Keeps the people-counter pipeline running, so it picks up every event the people-stream app writes. Resume it for a session and pause it when done; it keeps running through every app START. See doc/pipeline.md, "Running the pipeline".
       # Continuous: the job keeps a pipeline update running (a micro-batch every 2 seconds per table,
       # pipelines.trigger.interval in the pipeline's settings), and starts a new one if it ends or fails.
       # Created paused (development mode pauses it on every deploy anyway): Resume it in the job's page.

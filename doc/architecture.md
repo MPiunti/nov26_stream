@@ -1,6 +1,6 @@
 # Solution overview: how it works
 
-The whole solution on one page: what it does, its three independent parts, how they are decoupled, and how fast data moves through it. Written as the starting point for presentations; the detailed pages are linked from each section and listed in [`agents.md`](../agents.md).
+The whole solution on one page: what it does, its three independent parts, how they are decoupled, the Databricks services it runs on, and how fast data moves through it. It is level 1 of the documentation: the executive view is in [`executive_brief.md`](executive_brief.md), the reasons behind each choice in [`decisions.md`](decisions.md), and the detailed pages are linked from each section and listed in [`agents.md`](../agents.md).
 
 ## 1. In short
 
@@ -10,30 +10,47 @@ A retail group with **200 stores** in Europe, the Americas and Asia, and an **e-
 - A **streaming data pipeline** checks every event and sale and stores the valid ones, seconds after they happen.
 - A **BI engine**, the sales dashboard, shows value, quantity, average price and people in, live, with drill-down by geography and product.
 
+On top of the data, a **semantic layer** of Unity Catalog metric views defines every KPI once; the dashboard's Clienteling tab and the **Genie agent**, which answers questions in plain language, both read it.
+
 The three parts are **decoupled**: each can be started, stopped, redeployed or replaced without touching the others. All data is synthetic.
 
 ## 2. The picture
 
 ```
- SIMULATION ENGINE                 DATA PIPELINE                          BI ENGINE
- people-stream app                 continuous job + pipeline              sales dashboard app
+ SIMULATION ENGINE              DATA PIPELINE                    SEMANTIC LAYER           BI ENGINE AND AI
+ people-stream app              continuous job + pipeline        views in Unity Catalog   dashboard app, Genie
 
- START ─▶ people events ──▶ source ──▶ bronze ──▶ silver ──┐
-          sales         ──▶ tables     (raw)      (valid)   ├─▶ current-simulation ──▶ KPI cards
-                            append-               quarantine│     views                 trend lines
-                            only                  (invalid) │   (latest simulation)     drill-down bars
-                                                            │
- stores, clients, products (dimensions) ────────────────────┴─────────────────────────▶ names, filters
+ START ─▶ people events ─▶ source ─▶ bronze ─▶ silver ──┬─▶ current-simulation ───▶ KPI cards, trend lines,
+          sales        ─▶ tables    (raw)     (valid)   │   views                    drill-down bars
+                           append-             quarantine├─▶ metric views ─────────▶ Clienteling tab
+                           only                (invalid) │   client_metrics   └────▶ Genie: questions in
+                                                         │   store_metrics           plain language
+ stores, clients, products (dimensions) ─────────────────┴─────────────────────────▶ names, filters
 
- writes: source tables only        reads sources, writes bronze/silver    reads: views and dimensions only
+ writes: source tables only     reads sources, writes             defines, stores nothing  reads only
+                                bronze, silver, quarantine
 ```
 
 | Part | What it is | Its job | Detail |
 |---|---|---|---|
 | **Simulation engine** | The people-stream app | Generates people-counter events for the 200 physical stores, the sales they lead to, and the online sales of the 13 e-commerce stores, and writes them to two source tables, as an event broker would deliver them | [`people_stream.md`](people_stream.md), [`sales.md`](sales.md) |
-| **Data pipeline** | A streaming pipeline kept running by a continuous job | Bronze keeps every message as received; silver keeps the parsed, typed, valid ones; quarantine keeps the invalid ones with the reason | [`readme.md`](../readme.md), [`warehouse.md`](warehouse.md) |
+| **Data pipeline** | A streaming pipeline kept running by a continuous job | Bronze keeps every message as received; silver keeps the parsed, typed, valid ones; quarantine keeps the invalid ones with the reason | [`pipeline.md`](pipeline.md), [`warehouse.md`](warehouse.md) |
+| **Semantic layer** | Two Unity Catalog metric views, `client_metrics` and `store_metrics` | Defines every KPI once, with its business description, computed live from silver for any slice | [`kpi_metrics.md`](kpi_metrics.md), [`kpi_glossary.md`](kpi_glossary.md) |
 | **Genie agent** | Retail KPI Assistant | Answers executives' questions in natural language on the KPIs of the metric views, and explains each KPI's definition; available under Genie and in the dashboard's Ask Genie tab | [`kpi_genie.md`](kpi_genie.md) |
 | **BI engine** | The sales dashboard app | Self-service sales and footfall analysis, refreshed every 5 seconds, with filters and drill-down | [`sales_dashboard.md`](sales_dashboard.md) |
+
+**The Databricks services it runs on:**
+
+| Service | Used for | How it is set up |
+|---|---|---|
+| **Lakeflow Declarative Pipelines** | The streaming pipeline: bronze, silver, quarantine for people events and sales | Serverless, triggered, kept running by a continuous Lakeflow job; micro-batches every 2 seconds |
+| **Delta Lake** | Every table: sources, streaming tables, dimensions | Open format; liquid clustering by `simulation_id` on silver |
+| **Unity Catalog** | Governance: three schemas, declared primary and foreign keys, grants per app, lineage, the metric views | Catalog `workspace`; schemas `test02_warehouse`, `test02_streaming`, `test02_metric` ([`warehouse.md`](warehouse.md)) |
+| **Unity Catalog metric views** | The semantic layer: every KPI defined once | YAML definitions in Git, deployed by a SQL job ([`kpi_metrics.md`](kpi_metrics.md)) |
+| **Databricks SQL** | Every query and write of the apps, and the metric view deployment | The Serverless Starter Warehouse: starts on the first query, stops when idle |
+| **Databricks Apps** | The simulator and the dashboard | Python (Dash), each running as its own service principal with only its permissions |
+| **Genie** | Natural-language questions on the KPIs | The Retail KPI Assistant, defined as code with 10 benchmark questions ([`kpi_genie.md`](kpi_genie.md)) |
+| **Declarative Automation Bundles** | Deploying everything from Git | Four bundles today, one proposed ([`decisions.md`](decisions.md) D12) |
 
 ## 3. How the engines are decoupled
 
@@ -64,7 +81,7 @@ What this decoupling means in practice:
 4. The views now see a higher simulation id and show only the new simulation.
 5. The dashboard's next refresh shows the new simulation: the numbers restart from zero and grow every few seconds.
 
-Nothing is paused, refreshed or restarted. Earlier simulations stay in silver for analysis and are removed by an occasional housekeeping refresh ([`readme.md`](../readme.md), "Running the pipeline").
+Nothing is paused, refreshed or restarted. Earlier simulations stay in silver for analysis and are removed by an occasional housekeeping refresh ([`pipeline.md`](pipeline.md) §3).
 
 ## 5. How fast
 
@@ -103,7 +120,8 @@ The pipeline's micro-batch interval is set to 2 seconds; in practice each micro-
 | **Data quality** | Every event and sale is validated (8 rules for events, 11 for sales). Invalid rows are not lost: they go to a quarantine table with the reasons |
 | **Keys** | Natural business keys everywhere; silver declares its primary and foreign keys to the dimensions |
 | **Access** | Each app runs as its own service principal with only the permissions listed in §3 |
-| **Reproducible deployment** | Everything is code in one Git repository: pipeline, apps, tables, views and documentation. Three bundles deploy it |
+| **One definition of every KPI** | The metric views; the dashboard's Clienteling tab and Genie read the same definitions, and the glossary repeats each description word for word |
+| **Reproducible deployment** | Everything is code in one Git repository: pipeline, apps, KPIs, Genie agent, tables, views and documentation. Four bundles deploy it today ([`operations.md`](operations.md) §3) |
 | **Tests** | Automated tests check that the code, the bundles, the SQL scripts and these documents agree, before anything is deployed |
 | **Synthetic data** | No real customer, store or company data is used |
 
@@ -123,6 +141,7 @@ The pipeline's micro-batch interval is set to 2 seconds; in practice each micro-
 | The source is a simulator writing to tables | Connect Azure Event Hubs; the source tables already have its message envelope |
 | Micro-batches take 4 to 6 seconds | Tune the pipeline's processing per batch, or accept this latency: the simulator itself writes every 5 seconds |
 | E-commerce is sized on the stores' expected sales, with a fixed online curve | Model online traffic too (sessions, conversion), as the stores have people counting |
-| KPIs are computed inside the dashboard's own queries | A governed semantic layer: Unity Catalog **metric views** in `test02_metric`, live on silver, one definition shared by the dashboard, AI/BI and Genie. Chosen over a refreshed KPI table, confirmed to work on the workspace; first use, a Clienteling tab with client and store KPIs ([`kpi_metrics.md`](kpi_metrics.md)) |
+| The Sales performance tab still computes its KPIs in its own queries; only Clienteling and Genie read the metric views | Move the Sales performance tab onto the metric views too, and add AI/BI dashboards on them ([`kpi_metrics.md`](kpi_metrics.md) §7) |
+| Four bundles deployed one by one, SQL scripts run by hand, schema names written into the code | One bundle per environment, deployed by CI after the tests, with schema names as settings ([`decisions.md`](decisions.md) D12) |
 | The dashboard shows only the current simulation | Add a simulation selector, to compare runs: silver already keeps them |
 | Free Edition workspace, one SQL warehouse shared by both apps | A paid workspace separates the simulator's writes from the dashboard's queries |

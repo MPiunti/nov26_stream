@@ -1,6 +1,6 @@
 # KPIs and metric views: the semantic layer
 
-Reference for the project's business KPIs: how they are defined, where they live, and why they are built as Unity Catalog **metric views**. The first consumer is the sales dashboard's planned **Clienteling** tab: sales KPIs on the two main entities, **clients** and **stores**.
+Reference for the project's business KPIs: how they are defined, where they live, and why they are built as Unity Catalog **metric views**. They serve sales KPIs on the two main entities, **clients** and **stores**, to the sales dashboard's **Clienteling** tab and to the Genie agent (§7). The decision is also recorded in [`decisions.md`](decisions.md) D7 and D8.
 
 The data underneath is described in [`sales.md`](sales.md) (transactions, baskets, channels), [`dataset.md`](dataset.md) (stores), [`client.md`](client.md) and [`product.md`](product.md); schemas and keys in [`warehouse.md`](warehouse.md); the whole solution in [`architecture.md`](architecture.md).
 
@@ -53,7 +53,7 @@ A third schema, next to the other two ([`warehouse.md`](warehouse.md) §1):
 | `test02_streaming` | Sources and pipeline tables (bronze, silver, quarantine) |
 | **`test02_metric`** | **Metric views and KPIs only.** They read silver and the dimensions; nothing else writes here |
 
-Created by `src/sql/17_create_metric_schema.sql` (idempotent). Created in the workspace on 16 November 2026; empty for now.
+Created by `src/sql/17_create_metric_schema.sql` (idempotent). Created in the workspace on 16 November 2026; it holds the two metric views of §8.
 
 ## 5. Design rules
 

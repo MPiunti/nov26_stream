@@ -79,7 +79,7 @@ The level buttons on the left of each chart ("Select the chart fields") choose w
 | Step | Delay |
 |---|---|
 | People-stream app → source tables | A batch every 5 s (30 simulated minutes); see [`people_stream.md`](people_stream.md) §4 |
-| Source → silver | The continuous job keeps a pipeline update running, with a micro-batch every 2 seconds per table (`pipelines.trigger.interval`); see `readme.md`, "Running the pipeline" |
+| Source → silver | The continuous job keeps a pipeline update running, with a micro-batch every 2 seconds per table (`pipelines.trigger.interval`); see [`pipeline.md`](pipeline.md) §3 |
 | Silver → screen | The dashboard queries silver **every 5 seconds** (`REFRESH_SECONDS` in `app/app.yaml`, at least 2). The **Live** switch stops and restarts the refresh |
 
 Each refresh runs six read-only queries in parallel, all six at once (sales by region, GMT date and hour; people likewise; the geography, product and channel breakdowns; freshness), on one reused connection per worker thread. Measured on the Serverless Starter Warehouse: about 1.6–1.9 s per query, 3–4 s per refresh. The dimensions are read once and cached.
