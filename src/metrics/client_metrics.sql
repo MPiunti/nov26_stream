@@ -5,7 +5,10 @@
 --         (one row per item sold, every channel), joined to dim_client,
 --         dim_store and dim_product on their natural keys, with each
 --         client's total spent in the simulation (a window over the
---         client and the simulation): the base of the client segments.
+--         client and the simulation): the base of the client segments;
+--         and each client's preferred store in the simulation (the store
+--         with the most of the client's visits, i.e. EXIT events): a
+--         subquery grouped by client and store, joined on client and simulation.
 --         A query source can't use joins: the dimensions are joined in it.
 --
 -- Every dimension and measure has a functional description (comment);
@@ -39,12 +42,23 @@ source: |
   SELECT s.simulation_id, s.client_id, c.country_code AS client_country, c.macro_region AS client_region,
          s.store_id, d.store_name, d.channel, d.country_code AS store_country, d.macro_region,
          s.category, p.product_name, s.transaction_id, s.amount, s.quantity, s.transaction_timestamp_utc,
-         SUM(s.amount) OVER (PARTITION BY s.simulation_id, s.client_id) AS client_simulation_spent
+         s.exit_event_id,
+         SUM(s.amount) OVER (PARTITION BY s.simulation_id, s.client_id) AS client_simulation_spent,
+         v.preferred_store_id, ps.store_name AS preferred_store_name
   FROM workspace.test02_streaming.silver_sales_transactions s
   JOIN workspace.test02_warehouse.dim_store d ON s.store_id = d.store_id
   LEFT JOIN workspace.test02_warehouse.dim_client c ON s.client_id = c.client_id
   LEFT JOIN workspace.test02_warehouse.dim_product p ON s.product_id = p.product_id
-comment: "Client KPIs: what each client buys, in every channel, and the client segments by spend, computed live from silver at query time. One source row per item sold; a transaction is a basket of items. Glossary: doc/kpi_glossary.md"
+  LEFT JOIN (
+    SELECT simulation_id, client_id, store_id AS preferred_store_id
+    FROM workspace.test02_streaming.silver_sales_transactions
+    WHERE exit_event_id IS NOT NULL
+    GROUP BY simulation_id, client_id, store_id
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY simulation_id, client_id
+                               ORDER BY COUNT(DISTINCT exit_event_id) DESC, SUM(amount) DESC, store_id) = 1
+  ) v ON s.simulation_id = v.simulation_id AND s.client_id = v.client_id
+  LEFT JOIN workspace.test02_warehouse.dim_store ps ON v.preferred_store_id = ps.store_id
+comment: "Client KPIs: what each client buys, in every channel, the client segments by spend and each client's preferred store, computed live from silver at query time. One source row per item sold; a transaction is a basket of items. Glossary: doc/kpi_glossary.md"
 dimensions:
   - name: Simulation
     expr: simulation_id
@@ -71,6 +85,13 @@ dimensions:
   - name: Client Segment Rank
     expr: "CASE WHEN client_simulation_spent IS NULL OR client_simulation_spent <= 0 THEN 0 WHEN client_simulation_spent < 600 THEN 1 WHEN client_simulation_spent < 2000 THEN 2 WHEN client_simulation_spent < 5000 THEN 3 WHEN client_simulation_spent < 10000 THEN 4 WHEN client_simulation_spent < 15000 THEN 5 ELSE 6 END"
     comment: "The client segment's position from the lowest to the highest spend, to sort segments: 0 Not Defined, 1 Occasional, 2 Experiencer, 3 Aspiring, 4 Potential VIC, 5 VIC1, 6 VICSTAR."
+  - name: Preferred Store
+    expr: "COALESCE(preferred_store_id, 'ND')"
+    comment: "The store the client visits most in the whole simulation, by natural key (e.g. IT-MI-001): the physical store with the most of the client's visits, where a visit is an EXIT event, one person leaving the store. Visits count, not items or spend: a client who bought 3 items in store A but left store B 4 times prefers B. A tie goes to the store where the client spent more, then to the lower store code. ND (Not Defined) for a client who only bought online. Fixed per client and simulation: filters on dates, stores or categories don't change it. A visit is known when the client bought something: the door counters don't identify people."
+    synonyms: ["Favourite store", "Favorite store", "Home store", "Most visited store"]
+  - name: Preferred Store Name
+    expr: "COALESCE(preferred_store_name, 'Not Defined')"
+    comment: "Name of the client's preferred store, e.g. Milan Galleria Vittorio Emanuele, for the code in Preferred Store; Not Defined for a client who only bought online."
   - name: Store
     expr: store_id
     comment: "Where the client bought, by natural key: a physical store (e.g. IT-MI-001) or a country's online store (e.g. IT-EC-001)."
@@ -137,6 +158,12 @@ measures:
   - name: Stores Visited
     expr: COUNT(DISTINCT store_id)
     comment: "Number of different points of sale where the client bought; a country's online store counts as one."
+    format:
+      type: number
+  - name: Visits
+    expr: COUNT(DISTINCT exit_event_id)
+    comment: "Number of the client's visits to physical stores: the EXIT events, one person leaving a store, at which the client bought. Online orders are not visits. The base of Preferred Store."
+    synonyms: ["Store visits", "Exits"]
     format:
       type: number
   - name: Online Spent

@@ -39,7 +39,7 @@ A luxury retail group with **200 stores in 13 countries** across Europe, the Ame
 |---|---|---|
 | **Store operations** | Staff to the traffic of the next hour, not last month's average | People in and out per store and hour, live, on one worldwide timeline |
 | **Conversion** | Find the stores where visitors leave without buying, while it is happening | Conversion per store, channel, region and hour: about 15% on a typical run, 17–18% at the flagships |
-| **Clienteling** | Recognize VIC and potential-VIC clients and give client advisors a reason to call | Client segments OCC, EXP, ASP, POT, VIC1, VICSTAR, fixed per client, live; top clients with their spend, stores visited and online share |
+| **Clienteling** | Recognize VIC and potential-VIC clients, assign each to the store they keep coming back to, and give its client advisors a reason to call | Client segments OCC, EXP, ASP, POT, VIC1, VICSTAR, fixed per client, live; each client's preferred store, by visits; top clients with their spend, stores visited and online share |
 | **Tourism and flagships** | Plan flagship assortments and staff for international visitors | Visitor share of revenue: about 70% at New York Fifth Avenue on a typical run |
 | **Omnichannel** | Balance online and in-store: share, basket, price | E-commerce share per country (10%, 15% in the US and China), online vs store basket |
 | **Merchandising** | React to a category or product taking off today | Drill-down from category to product, live |

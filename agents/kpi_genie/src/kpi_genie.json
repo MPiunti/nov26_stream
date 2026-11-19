@@ -270,6 +270,11 @@
               "column_name": "Macro Region",
               "enable_format_assistance": true,
               "enable_entity_matching": true
+            },
+            {
+              "column_name": "Preferred Store Name",
+              "enable_format_assistance": true,
+              "enable_entity_matching": true
             }
           ]
         },
@@ -319,6 +324,7 @@
             "- Revenue is the store KPI and Total Spent the client KPI: the same euros, seen by store or by client.\n",
             "- Conversion means buyers per person leaving a physical store; e-commerce has no conversion.\n",
             "- Client segments (OCC, EXP, ASP, POT, VIC1, VICSTAR, ND) are set by a client's spend in the whole simulation; VIC clients means VIC1 and VICSTAR.\n",
+            "- A client's preferred store (favourite, home or most visited store) is the Preferred Store dimension: the physical store with the most of the client's visits (EXIT events) in the whole simulation, not the store where they spent most; ND means online only.\n",
             "- When asked what a KPI means, answer from the description of that measure in its metric view.\n",
             "\n",
             "## DATA QUALITY NOTES\n",

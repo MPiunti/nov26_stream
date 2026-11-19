@@ -188,7 +188,7 @@ CLIENTELING_ROWS = 20  # rows of the stores and clients tables
 
 # (measure in the metric view, column alias)
 CLIENT_KPIS = (("Total Spent", "total_spent"), ("Transactions", "transactions"), ("Items", "items"),
-               ("Average Basket", "average_basket"), ("Stores Visited", "stores_visited"),
+               ("Average Basket", "average_basket"), ("Stores Visited", "stores_visited"), ("Visits", "visits"),
                ("Online Share", "online_share"))
 STORE_KPIS = (("Revenue", "revenue"), ("Transactions", "transactions"), ("Average Basket", "average_basket"),
               ("Items per Basket", "items_per_basket"), ("Distinct Clients", "distinct_clients"),
@@ -220,9 +220,10 @@ def _measures(kpis):
 
 
 def client_kpis_sql(f, simulation, limit=CLIENTELING_ROWS):
-    """The top clients by total spent, with their KPIs."""
+    """The top clients by total spent, with their KPIs and their preferred store (most visits, whole simulation)."""
     clause, params = metric_where(f, simulation, categories=True)
     sql = f"""SELECT `Client` AS client, `Client Country` AS client_country, `Client Segment` AS client_segment,
+  `Preferred Store` AS preferred_store,
   {_measures(CLIENT_KPIS)}
 FROM {table('CLIENT_METRICS')}
 {clause}

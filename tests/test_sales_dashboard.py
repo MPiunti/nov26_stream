@@ -176,6 +176,17 @@ class ClientelingTests(unittest.TestCase):
                      'Output("cl-segments", "data")', "def segment_rows(rows):"):
             self.assertIn(text, code)
 
+    def test_top_clients_show_their_preferred_store_and_visits(self):
+        sql, _ = q.client_kpis_sql(q.Filters(), "20261116T202836703")
+        self.assertIn("`Preferred Store` AS preferred_store", sql)
+        self.assertIn("MEASURE(`Visits`) AS visits", sql)
+        from test_kpi_metrics import _entries
+        self.assertIn("Preferred Store", _entries("client_metrics")[0])
+        code = read_text(*APP, "app", "app.py")
+        for text in ('("preferred_store", "Preferred store", None)', '("visits", "Visits", _COUNT)'):
+            self.assertIn(text, code)
+        self.assertIn("preferred store", read_text("doc", "sales_dashboard.md"))
+
     def test_the_kpis_are_the_metric_views_measures(self):
         """Every measure the tab asks for exists in its metric view (src/metrics/)."""
         from test_kpi_metrics import _entries

@@ -184,9 +184,10 @@ STORE_COLUMNS = (("store", "Store", None), ("store_name", "Name", None), ("chann
                  ("visitor_share", "Visitor share", _PCT), ("people_in", "People in", _COUNT),
                  ("conversion", "Conversion", _PCT))
 CLIENT_COLUMNS = (("client", "Client", None), ("client_country", "Country", None), ("client_segment", "Segment", None),
-                  ("total_spent", "Total spent", _EUR), ("transactions", "Transactions", _COUNT),
+                  ("preferred_store", "Preferred store", None), ("total_spent", "Total spent", _EUR), ("transactions", "Transactions", _COUNT),
                   ("items", "Items", _COUNT), ("average_basket", "Avg basket", _EUR),
-                  ("stores_visited", "Stores visited", _COUNT), ("online_share", "Online share", _PCT))
+                  ("stores_visited", "Stores visited", _COUNT), ("visits", "Visits", _COUNT),
+                  ("online_share", "Online share", _PCT))
 
 
 SEGMENT_COLUMNS = (("segment", "Segment", None), ("segment_name", "Name", None), ("clients", "Clients", _COUNT),
@@ -234,8 +235,9 @@ def clienteling_tab():
             dbc.Col(panel([html.Div(f"TOP {q.CLIENTELING_ROWS} CLIENTS BY TOTAL SPENT", className="panel-title mb-1"),
                            kpi_table("cl-clients", CLIENT_COLUMNS)], height="100%"), xs=12, xl=5, className="mb-2"),
         ], className="g-2"),
-        html.Div("KPI definitions: doc/kpi_glossary.md, the same descriptions as the metric views'. Sort a table by "
-                 "clicking its column headers.", className="tiny text-muted"),
+        html.Div("KPI definitions: doc/kpi_glossary.md, the same descriptions as the metric views'. Preferred store: "
+                 "the store with the most of the client's visits (exits) in the whole simulation, ND if online only. "
+                 "Sort a table by clicking its column headers.", className="tiny text-muted"),
     ], className="pt-2")
 
 

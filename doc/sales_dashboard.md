@@ -133,7 +133,7 @@ Client and store KPIs, read from the Unity Catalog metric views `client_metrics`
 | **Cards** | Over every store in the filters, from `store_metrics`: REVENUE, TRANSACTIONS, AVG BASKET, CLIENTS (distinct clients), VISITOR SHARE, CONVERSION (physical stores only) |
 | **TOP 20 STORES BY REVENUE** | From `store_metrics`: store, name, channel, country, revenue, transactions, average basket, items per basket, clients, visitor share, people in, conversion. E-commerce stores have no people in and no conversion |
 | **CLIENTS BY SEGMENT** | From `client_metrics`, lowest spend first: segment code and name, clients and their share, total spent and its share, average basket, transactions. A client's segment is set by its spend in the whole simulation ([`kpi_glossary.md`](kpi_glossary.md)), so the filters change which clients are counted, not their segment |
-| **TOP 20 CLIENTS BY TOTAL SPENT** | From `client_metrics`: client, country, segment, total spent, transactions, items, average basket, stores visited, online share |
+| **TOP 20 CLIENTS BY TOTAL SPENT** | From `client_metrics`: client, country, segment, preferred store, total spent, transactions, items, average basket, stores visited, visits, online share. The preferred store is the store with the most of the client's visits (`EXIT` events) in the whole simulation, ND for a client who only bought online ([`kpi_glossary.md`](kpi_glossary.md)); like the segment, the filters don't change it |
 
 - **Sorting:** both tables sort by any column, by clicking its header; numbers sort as numbers.
 - **Current simulation:** the queries filter on the simulation the footer shows (the latest `simulation_id`), passed as a parameter.

@@ -28,7 +28,7 @@ Two ways to serve KPIs in a near-real-time solution, where silver receives new s
 
 **In one line, for the executive summary:** metric views give live KPIs with one governed definition and no extra pipeline, and keep a path to pre-computation when volumes grow.
 
-**What a metric view can't express:** KPIs computed per client first and only then grouped, such as client segments (top spenders, recency or frequency bands), first purchase, new vs returning, or a client's favourite store. Within the metric-view approach these are handled by a source query in the metric view's definition, or, if needed, by a governed SQL function. A separate KPI table stays the last resort.
+**What a metric view can't express:** KPIs computed per client first and only then grouped, such as client segments (top spenders, recency or frequency bands), first purchase, new vs returning, or a client's favourite store. Within the metric-view approach these are handled by a source query in the metric view's definition (as the client segments and the preferred store are, §6.1), or, if needed, by a governed SQL function. A separate KPI table stays the last resort.
 
 ## 3. Feasibility: checked on the workspace
 
@@ -82,9 +82,13 @@ Agreed with the owner on 16 November 2026, one by one. The functional descriptio
 | Stores visited | Different stores where the client bought | `COUNT(DISTINCT store_id)` by client | Approved |
 | Online share | Part of the client's spend made online | Spend in `ECOM` stores / total spent | Approved |
 | Clients | How many different clients bought | `COUNT(DISTINCT client_id)` | Approved (17 November 2026), to count clients by segment |
+| Visits | The client's visits to physical stores: the `EXIT` events at which the client bought | `COUNT(DISTINCT exit_event_id)` by client | Proposed (19 November 2026), the base of the preferred store |
 | **Client segment** | The client's tier by what they spent in the whole simulation: OCC (Occasional) under 600 EUR, EXP (Experiencer) 600 to under 2,000, ASP (Aspiring) 2,000 to under 5,000, POT (Potential VIC) 5,000 to under 10,000, VIC1 10,000 to under 15,000, VICSTAR 15,000 and more, ND (Not Defined) with no spend to classify | A dimension of `client_metrics`: a band of the client's total spent in the simulation (a window over client and simulation in the view's source query) | Approved (17 November 2026) |
+| **Preferred store** | The physical store the client visits most in the whole simulation, counting visits (`EXIT` events), not items or spend: 3 items bought in store A and 4 exits from store B make B the preferred store. Ties: higher spend at the store, then lower store code. ND for a client who only bought online | Dimensions `Preferred Store` (code) and `Preferred Store Name` of `client_metrics`: in the view's source query, a subquery grouped by simulation, client and store ranks the stores by distinct `exit_event_id`, joined back on client and simulation | Proposed (19 November 2026) |
 
 **Client segments, decided 17 November 2026:** the thresholds were first proposed at 60, 200, 500, 1,000 and 1,500 EUR; with luxury prices (cheapest item 198 EUR, typical purchase about 1,000 EUR) they put no client in OCC and half of the clients in VICSTAR, so they were raised ten times. On the simulation of that day: OCC 13%, EXP 51%, ASP 33%, POT 2.8%, 12 VIC1 clients, no VICSTAR; a 48-hour simulation is short for VIC spending. The segment is **fixed per client and simulation**: "spend of VIC1 clients in Europe" is the European spend of clients who are VIC1 overall. Upper bounds are exclusive: 600 EUR is EXP.
+
+**Preferred store, proposed 19 November 2026:** a visit is one `EXIT` event, one person leaving a store. The door counters are anonymous (`dataset.md` §3.3: a store, a time, a direction and a head count), so a visit is tied to a client only through a purchase: every store transaction carries the `exit_event_id` of the visit it was made in ([`sales.md`](sales.md) §4, §5). Visits are therefore the client's buying visits; a client who leaves a store without buying adds no visit. Several items or transactions in one visit count as one visit, so the preferred store can differ from the store where the client bought the most. Like the segment, it is **fixed per client and simulation**: filters change which purchases are counted, not the preferred store.
 
 ### 6.2 Stores
 
@@ -115,7 +119,7 @@ One metric view per main entity:
 
 | Metric view | Over | Holds | Definition |
 |---|---|---|---|
-| `workspace.test02_metric.client_metrics` | A query on `silver_sales_transactions`, with `dim_client`, `dim_store`, `dim_product` and each client's total spent in the simulation | The client KPIs: Clients, Total Spent, Transactions, Items, Average Basket, Stores Visited, Online Spent and Share, and the client segments. 8 measures, 16 dimensions | `src/metrics/client_metrics.sql` |
+| `workspace.test02_metric.client_metrics` | A query on `silver_sales_transactions`, with `dim_client`, `dim_store`, `dim_product`, each client's total spent in the simulation and their preferred store | The client KPIs: Clients, Total Spent, Transactions, Items, Average Basket, Stores Visited, Visits, Online Spent and Share, the client segments and the preferred store. 9 measures, 18 dimensions | `src/metrics/client_metrics.sql` |
 | `workspace.test02_metric.store_metrics` | A query on `silver_sales_transactions` and `silver_people_counter_events`, with the store and client attributes | The store KPIs: Revenue, Transactions, Items, Average Basket, Items per Basket, Distinct Clients, Visitor Revenue and Share, Store Transactions, People In, People Out, Conversion. 12 measures, 10 dimensions | `src/metrics/store_metrics.sql` |
 
 Ratios use `try_divide`, so a slice with nothing to divide by (e-commerce has no people, a store with traffic has no sale yet) shows empty instead of failing. Filtered sums return 0 when nothing matches.

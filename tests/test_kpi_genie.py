@@ -140,6 +140,15 @@ class SemanticsTests(unittest.TestCase):
         self.assertTrue(configs["Client Segment"]["enable_entity_matching"])
         self.assertIn("VIC clients means VIC1 and VICSTAR", "".join(s["instructions"]["text_instructions"][0]["content"]))
 
+    def test_knows_the_preferred_store(self):
+        s = _space()
+        client = [m for m in s["data_sources"]["metric_views"] if m["identifier"].endswith("client_metrics")][0]
+        configs = {c["column_name"]: c for c in client["column_configs"]}
+        self.assertTrue(configs["Preferred Store Name"]["enable_entity_matching"])
+        text = "".join(s["instructions"]["text_instructions"][0]["content"])
+        self.assertIn("preferred store", text)
+        self.assertIn("not the store where they spent most", text)
+
     def test_join_specs_on_natural_keys(self):
         for j in _space()["instructions"]["join_specs"]:
             left, right = j["left"]["alias"], j["right"]["alias"]

@@ -89,6 +89,46 @@ class MetricViewTests(unittest.TestCase):
             self.assertIn(text, comment)
         self.assertEqual(measures["Clients"][0], "COUNT(DISTINCT client_id)")
 
+    def test_preferred_store(self):
+        """The store with the most of the client's visits (distinct EXIT events) in the whole simulation, not the most
+        items or spend; ties to the higher spend, then the lower store code; ND when the client only bought online."""
+        source = _definition("client_metrics").split("source: |", 1)[1].split("\ncomment:", 1)[0]
+        sub =source.split("LEFT JOIN (", 1)[1].split(") v ON", 1)[0]
+        self.assertIn(f"FROM {SALES}", sub)
+        self.assertIn("WHERE exit_event_id IS NOT NULL", sub, "online orders are not visits")
+        self.assertIn("GROUP BY simulation_id, client_id, store_id", sub)
+        self.assertIn("PARTITION BY simulation_id, client_id", sub, "fixed per client and simulation")
+        self.assertRegex(sub, r"ORDER BY COUNT\(DISTINCT exit_event_id\) DESC, SUM\(amount\) DESC, store_id\) = 1",
+                         "visits first, then spend, then store code")
+        self.assertIn(") v ON s.simulation_id = v.simulation_id AND s.client_id = v.client_id", source)
+        self.assertIn("LEFT JOIN workspace.test02_warehouse.dim_store ps ON v.preferred_store_id = ps.store_id", source)
+        dims, measures = _entries("client_metrics")
+        self.assertEqual(dims["Preferred Store"][0], "\"COALESCE(preferred_store_id, 'ND')\"")
+        self.assertEqual(dims["Preferred Store Name"][0], "\"COALESCE(preferred_store_name, 'Not Defined')\"")
+        for text in ("a visit is an EXIT event", "3 items in store A but left store B 4 times prefers B",
+                     "ND (Not Defined) for a client who only bought online", "Fixed per client and simulation"):
+            self.assertIn(text, dims["Preferred Store"][1])
+        self.assertEqual(measures["Visits"][0], "COUNT(DISTINCT exit_event_id)")
+
+    def test_preferred_store_rule_on_an_example(self):
+        """The ranking of the source query, replayed in Python: 3 items in A in one visit, 4 visits to B: B."""
+        lines = [("A", "x1", 1000)] * 3 + [("B", f"x{n}", 300) for n in range(2, 6)] + [("IT-EC-001", None, 5000)]
+
+        def preferred(rows):
+            stores = {}
+            for store, exit_id, amount in rows:
+                if exit_id is None:
+                    continue
+                visits, spent = stores.get(store, (set(), 0))
+                stores[store] = (visits | {exit_id}, spent + amount)
+            ranked = sorted(stores.items(), key=lambda kv: (-len(kv[1][0]), -kv[1][1], kv[0]))
+            return ranked[0][0] if ranked else "ND"
+
+        self.assertEqual(preferred(lines), "B")
+        self.assertEqual(preferred([("A", "x1", 100), ("B", "x2", 200)]), "B", "tie: the higher spend")
+        self.assertEqual(preferred([("B", "x1", 100), ("A", "x2", 100)]), "A", "tie again: the lower store code")
+        self.assertEqual(preferred([("IT-EC-001", None, 900)]), "ND", "online only")
+
     def test_store_metrics_put_sales_and_traffic_on_one_timeline(self):
         """Both silver facts in one source, so Conversion is a measure that holds for any store, region or hour."""
         store = _definition("store_metrics")
