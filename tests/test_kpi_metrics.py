@@ -93,13 +93,16 @@ class MetricViewTests(unittest.TestCase):
         """The store with the most of the client's visits (distinct EXIT events) in the whole simulation, not the most
         items or spend; ties to the higher spend, then the lower store code; ND when the client only bought online."""
         source = _definition("client_metrics").split("source: |", 1)[1].split("\ncomment:", 1)[0]
-        sub =source.split("LEFT JOIN (", 1)[1].split(") v ON", 1)[0]
+        sub = source.split("LEFT JOIN (", 1)[1].split(") v ON", 1)[0]
         self.assertIn(f"FROM {SALES}", sub)
         self.assertIn("WHERE exit_event_id IS NOT NULL", sub, "online orders are not visits")
         self.assertIn("GROUP BY simulation_id, client_id, store_id", sub)
+        self.assertIn("COUNT(DISTINCT exit_event_id) AS store_visits, SUM(amount) AS store_spent", sub)
         self.assertIn("PARTITION BY simulation_id, client_id", sub, "fixed per client and simulation")
-        self.assertRegex(sub, r"ORDER BY COUNT\(DISTINCT exit_event_id\) DESC, SUM\(amount\) DESC, store_id\) = 1",
-                         "visits first, then spend, then store code")
+        self.assertIn("ORDER BY store_visits DESC, store_spent DESC, store_id) = 1", sub,
+                      "visits first, then spend, then store code")
+        ranking = sub.split("QUALIFY", 1)[1]
+        self.assertNotRegex(ranking, r"(COUNT|SUM)\(", "QUALIFY can't hold aggregates: they are computed inside")
         self.assertIn(") v ON s.simulation_id = v.simulation_id AND s.client_id = v.client_id", source)
         self.assertIn("LEFT JOIN workspace.test02_warehouse.dim_store ps ON v.preferred_store_id = ps.store_id", source)
         dims, measures = _entries("client_metrics")

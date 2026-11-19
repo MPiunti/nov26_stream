@@ -51,11 +51,15 @@ source: |
   LEFT JOIN workspace.test02_warehouse.dim_product p ON s.product_id = p.product_id
   LEFT JOIN (
     SELECT simulation_id, client_id, store_id AS preferred_store_id
-    FROM workspace.test02_streaming.silver_sales_transactions
-    WHERE exit_event_id IS NOT NULL
-    GROUP BY simulation_id, client_id, store_id
+    FROM (
+      SELECT simulation_id, client_id, store_id,
+             COUNT(DISTINCT exit_event_id) AS store_visits, SUM(amount) AS store_spent
+      FROM workspace.test02_streaming.silver_sales_transactions
+      WHERE exit_event_id IS NOT NULL
+      GROUP BY simulation_id, client_id, store_id
+    )
     QUALIFY ROW_NUMBER() OVER (PARTITION BY simulation_id, client_id
-                               ORDER BY COUNT(DISTINCT exit_event_id) DESC, SUM(amount) DESC, store_id) = 1
+                               ORDER BY store_visits DESC, store_spent DESC, store_id) = 1
   ) v ON s.simulation_id = v.simulation_id AND s.client_id = v.client_id
   LEFT JOIN workspace.test02_warehouse.dim_store ps ON v.preferred_store_id = ps.store_id
 comment: "Client KPIs: what each client buys, in every channel, the client segments by spend and each client's preferred store, computed live from silver at query time. One source row per item sold; a transaction is a basket of items. Glossary: doc/kpi_glossary.md"
